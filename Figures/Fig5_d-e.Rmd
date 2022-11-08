@@ -18,6 +18,8 @@ suppressPackageStartupMessages({
 })
 ```
 
+Input: an excel file with all survival scores per module per cancer type.
+
 ```{r}
 results_tab <- read.xlsx("/gpfs/data/tsirigoslab/home/leh06/Others/NYU_RNA/surv_stats_tcga_modules_filtered.xlsx")
 

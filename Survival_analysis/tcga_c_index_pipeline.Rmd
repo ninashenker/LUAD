@@ -1,0 +1,273 @@
+---
+title: "Pipeline: TCGA C-Index Analysis of NYU Stage 1 Modules"
+output: html_notebook
+---
+
+```{r message=FALSE, warning=FALSE}
+suppressPackageStartupMessages({
+  library(survival)
+  library(survminer)
+  library(survcomp)
+  library(dplyr)
+  library(openxlsx)
+  library(stringr)
+  library(matrixStats)
+  library(tidyr)
+  library(readr)
+})
+```
+
+```{r}
+cohorts <- c("LUAD", "LUSC", "HNSC", "BRCA", "PRAD", "COAD", "THCA", "KIRC", "LIHC", "LUNG")
+stages <- c("stage-1", "all_stages")
+tissue_types <- c("normal", "tumor")
+survival_types <- c("OS", "PFS")
+```
+
+```{r}
+module_gene_list <- read.csv(file = "/gpfs/data/tsirigoslab/home/leh06/Others/NYU_RNA/246samples.coding10000.modules.dim10.k20.genes.csv")
+nb_clusters <- max(module_gene_list$module)
+```
+
+Create a function for survival analysis.
+
+```{r}
+survival_analysis <- function(rna_seq_tcga, clin_info_tcga, survival_type, cohort, stage, tissue_type){
+  
+  print(paste0("Cohort: ", cohort, "; Survival type: ", survival_type, "; Stage: ", stage, "; Tissue type: ", tissue_type))
+  
+  # normalized z-scores based on both normal and tumor but across all tissue types
+  rna_seq_tcga_inv_scaled <- scale(rna_seq_tcga)
+
+  # Calculate the module scores for each tumor and normal sample.
+  module_scores <- data.frame(matrix(ncol = nb_clusters, nrow = length(rownames(rna_seq_tcga_inv_scaled))))
+  rownames(module_scores) <- rownames(rna_seq_tcga_inv_scaled)
+  
+   for (cluster in 1:nb_clusters) {
+    genes_module <- module_gene_list$gene[module_gene_list$module == cluster]
+    genes_entrez_tcga <- colnames(rna_seq_tcga_inv_scaled)[colnames(rna_seq_tcga_inv_scaled) %in% c(genes_module)]
+    rna_seq_tcga_scaled_cl <- rna_seq_tcga_inv_scaled[,genes_entrez_tcga]
+    module_scores[,cluster] <- rowMeans(rna_seq_tcga_scaled_cl, na.rm = TRUE)
+    names(module_scores)[cluster] <- as.character(cluster)
+  }
+
+  if (stage == "stage-1"){
+    if ("clinical_stage" %in% names(clin_info_tcga)) {
+      clin_info_tcga <- clin_info_tcga[clin_info_tcga$clinical_stage %in% c("Stage I","Stage IA","Stage IB"),]
+    } else {
+      clin_info_tcga <- clin_info_tcga[clin_info_tcga$tumor_stage.diagnoses %in% c("stage i","stage ia","stage ib"),]
+    }
+  }
+  
+  if (survival_type == "OS") {
+    clin_info_tcga_sub <- data.frame(clin_info_tcga[,c("sample_name","days_to_death.demographic","days_to_last_follow_up.diagnoses","vital_status.demographic")])
+    clin_info_tcga_sub[c("days_to_death.demographic", "days_to_last_follow_up.diagnoses")] <- lapply(clin_info_tcga_sub[c("days_to_death.demographic", "days_to_last_follow_up.diagnoses")], function(x) x/30.437)
+    
+    clin_info_tcga_sub$time = clin_info_tcga_sub$days_to_death.demographic 
+    clin_info_tcga_sub$time[!is.na(clin_info_tcga_sub$days_to_last_follow_up.diagnoses)] = clin_info_tcga_sub$days_to_last_follow_up.diagnoses[!is.na(clin_info_tcga_sub$days_to_last_follow_up.diagnoses)]
+    
+    rownames(clin_info_tcga_sub) <- clin_info_tcga_sub$sample_name
+    clin_info_tcga_sub <- subset(clin_info_tcga_sub, select=-c(days_to_last_follow_up.diagnoses, days_to_death.demographic, sample_name))
+    
+    # Replace vital status by 0 for alive and 1 for dead
+    clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Alive"] <- 0
+    clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Dead"] <- 1
+    clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Not Reported"] <- NA
+    clin_info_tcga_sub <- clin_info_tcga_sub %>% drop_na(vital_status.demographic)
+    
+    names(clin_info_tcga_sub)[names(clin_info_tcga_sub)=="vital_status.demographic"] <- "status"
+  } else {
+    if ("days_to_new_tumor_event_after_initial_treatment" %in% names(clin_info_tcga)){
+      clin_info_tcga_sub <- data.frame(clin_info_tcga[,c("sample_name","days_to_last_follow_up.diagnoses","days_to_death.demographic","vital_status.demographic", "days_to_new_tumor_event_after_initial_treatment")])
+    
+    clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")] <- lapply(clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")], function(x) x/30.437)
+    clin_info_tcga_sub$time = clin_info_tcga_sub$days_to_death.demographic 
+    clin_info_tcga_sub$time[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)] = clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)]
+    
+    # 1 for patient having new tumor event/or died with cancer without new tumor event, and 0 for alive with progression
+    clin_info_tcga_sub$vital_status.demographic[!is.na(clin_info_tcga_sub$time)] <- 1
+    clin_info_tcga_sub$vital_status.demographic[is.na(clin_info_tcga_sub$time)] <- 0
+    
+    clin_info_tcga_sub$time[is.na(clin_info_tcga_sub$time)] = clin_info_tcga_sub$days_to_last_follow_up.diagnoses[is.na(clin_info_tcga_sub$time)]
+    
+    rownames(clin_info_tcga_sub) <- clin_info_tcga_sub$sample_name
+    clin_info_tcga_sub <- subset(clin_info_tcga_sub, select=-c(days_to_new_tumor_event_after_initial_treatment, days_to_death.demographic, days_to_last_follow_up.diagnoses, sample_name))
+    names(clin_info_tcga_sub)[names(clin_info_tcga_sub)=="vital_status.demographic"] <- "status"
+    } else {
+      return(data.frame(matrix(ncol=8,nrow=0, dimnames=list(NULL, c("module", "cohort", "stage", "tissue_type", "survival_type", "nb_samples", "pval", "c_index")))))
+    }
+  }
+   
+  # Filter per tissue type
+  if (tissue_type == "tumor"){
+    module_scores_filtered <- module_scores %>%
+      filter(grepl("-01", rownames(module_scores)))
+  } else {
+    module_scores_filtered <- module_scores %>%
+      filter(grepl("-11", rownames(module_scores)))
+  }
+  
+  # Average of all modules across patients
+  med_thresh <- colMedians(as.matrix(module_scores_filtered))
+  module_score_rank <- order(as.matrix(module_scores_filtered))
+  thresh <- as.integer(length(module_score_rank)*0.33)
+  
+  stats_tab <- data.frame(matrix(ncol=8,nrow=dim(module_scores)[2], dimnames=list(NULL, c("module", "cohort", "stage", "tissue_type", "survival_type", "nb_samples", "pval", "c_index"))))
+  stats_tab$module <- colnames(module_scores_filtered)
+  stats_tab$cohort <- rep(cohort, times=dim(module_scores)[2])
+  stats_tab$stage <- rep(stage, times=dim(module_scores)[2])
+  stats_tab$tissue_type <- rep(tissue_type, times=dim(module_scores)[2])
+  stats_tab$survival_type <- rep(survival_type, times=dim(module_scores)[2])
+
+  # For each module module, separate into low and high scores
+  for (module in 1:ncol(module_scores_filtered)){
+    module <- as.character(module)
+    module_scores_binary <- as.data.frame(module_scores_filtered[,module])
+    rownames(module_scores_binary) <- rownames(module_scores_filtered)
+    colnames(module_scores_binary) <- module
+    
+    thresh <- median((as.matrix(module_scores_binary)))
+    module_scores_binary[module_scores_filtered[,module] <= thresh,] <- "Low"
+    module_scores_binary[module_scores_filtered[,module] > thresh,] <- "High"
+   
+    # Get survival table
+    surv_tcga <- merge(clin_info_tcga_sub, module_scores_binary, by.x = 0, by.y = 0)
+    rownames(surv_tcga) <- surv_tcga$Row.names
+    surv_tcga <- surv_tcga[, -c(1)]
+    surv_tcga <- surv_tcga %>% drop_na(time)
+    surv_tcga$status <- as.numeric(surv_tcga$status)
+    
+    stats_tab[stats_tab$module == module,"nb_samples"] <- nrow(surv_tcga)
+    
+    surv_tcga_module <- surv_tcga[,c("time","status", module)]
+    colnames(surv_tcga_module)[colnames(surv_tcga_module) == module] <- "moduleScore"
+    
+    # Compute c-index
+    c_index_tab <- concordance.index(as.numeric(as.factor(surv_tcga_module$moduleScore)), surv_tcga_module$time, surv_tcga_module$status,method="noether")
+    stats_tab[stats_tab$module == module,"c_index"] <- c_index_tab$c.index
+    stats_tab[stats_tab$module == module,"pval"] <- c_index_tab$p.value
+  
+    if(stage =="all_stages" & tissue_type == "normal" & module == 20){
+      if (cohort == "LUNG"){
+        cancer_type <- "Lung"
+      } else if (cohort == "BRCA"){
+        cancer_type <- "Breast"
+      } else if (cohort == "KIRC"){
+        cancer_type <- "Kidney"
+      } else if (cohort == "HNSC"){
+        cancer_type <- "Head and Neck"
+      } else {
+        cancer_type <- "skip"
+      }
+      if (cancer_type != "skip"){
+        
+        ######## Plot Kaplan-Meier survival curves (Supplemental Fig 8) ######################
+        
+         # Divide into top and low 33% for high/low scores (K-M plots)
+        module_score_rank <- order(as.matrix(module_scores_filtered[,module]))
+        thresh <- as.integer(length(module_score_rank)*0.33)
+        module_scores_binary[module_score_rank[1:thresh],] <- "Low"
+        module_scores_binary[module_score_rank[(length(module_score_rank)-thresh+1):length(module_score_rank)],] <- "High"
+        module_scores_binary[module_score_rank[(thresh+1):(length(module_score_rank)-thresh)],] <- NA
+        module_scores_binary <- na.omit(module_scores_binary)
+        
+        # Get new survival table
+        surv_tcga <- merge(clin_info_tcga_sub, module_scores_binary, by.x = 0, by.y = 0)
+        rownames(surv_tcga) <- surv_tcga$Row.names
+        surv_tcga <- surv_tcga[, -c(1)]
+        surv_tcga <- surv_tcga %>% drop_na(time)
+        surv_tcga$status <- as.numeric(surv_tcga$status)
+        
+        surv_tcga_module <- surv_tcga[,c("time","status", module)]
+        colnames(surv_tcga_module)[colnames(surv_tcga_module) == module] <- "moduleScore"
+        
+        km_modscore_fit <- surv_fit(Surv(time = time, event = status) ~ moduleScore, data = surv_tcga_module) 
+        # png(file=paste("/gpfs/data/tsirigoslab/home/leh06/TCGA_Gx_Img_Analysis/results/20mod/km_bycohorts_",tolower(survival_type),"_normal_mod20/km_33perc_", cohort,"_final.png", sep = ""), width = 10, height = 7, units = 'in', res = 600)
+        ggsurv <- ggsurvplot(km_modscore_fit,
+                         pval = TRUE, conf.int = TRUE,
+                         risk.table = TRUE, 
+                         risk.table.col = "strata", 
+                         linetype = "strata", 
+                         surv.median.line = "hv", 
+                         ggtheme = theme_bw(), 
+                         palette = c("#E7B800", "#2E9FDF"),
+                         title = paste("TCGA", cancer_type, sep = " "),
+                         legend.labs = paste(c("High", "Low"), "module score"),
+                         subtitle = paste0("TCGA-",cohort,"-",toupper(substr(tissue_type,1,1)), ", ", nrow(surv_tcga)," Samples, Module ", module),
+                         xlab = "Months",
+                         ylab = "Survival probability",
+                         tables.theme = clean_theme(),
+                         pval.size = 10,
+                         surv.plot.height = 3,
+                         fontsize = 10,
+                         risk.table.height = 0.25
+                         )
+        ggsurv$plot <- ggsurv$plot +
+          theme(text = element_text(size = 25), plot.title=element_text(hjust=0.5, size = 35, face = "bold"))
+        ggsurv$table <- ggsurv$table + theme(text = element_text(size = 25))
+        print(ggsurv)
+        # dev.off()
+      }
+    }
+  }
+  
+  
+  
+  return(stats_tab)
+}
+```
+
+Load TCGA tumor and normal data and run survival analysis per module, cohort, stage, tissue type and for OS and PFS.
+
+```{r}
+stats_final <- data.frame(matrix(ncol=8,nrow=0, dimnames=list(NULL, c("module", "cohort", "stage", "tissue_type", "survival_type", "nb_samples", "pval", "c_index"))))
+for (cohort in cohorts){
+  if (cohort != "LUNG"){
+    # Load dataset
+    rna_seq_tcga <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-", cohort, ".exp.counts.tsv.gz"), sep = '\t', header = TRUE)
+  } else {
+    rna_seq_tcga_luad <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-LUAD.exp.counts.tsv.gz"), sep = '\t', header = TRUE)
+    rna_seq_tcga_lusc <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-LUSC.exp.counts.tsv.gz"), sep = '\t', header = TRUE)
+    rna_seq_tcga <- merge(rna_seq_tcga_luad, rna_seq_tcga_lusc, by = "gene_name")
+  }
+  rownames(rna_seq_tcga) <- rna_seq_tcga$gene_name
+  rna_seq_tcga <- subset(rna_seq_tcga, select = -gene_name)
+  
+  # Rename columns so they have the proper format (TCGA-##-####)
+  names(rna_seq_tcga) <- str_sub(names(rna_seq_tcga),0,16)
+  names(rna_seq_tcga) <- gsub("\\.", "-", names(rna_seq_tcga))
+  
+  rna_seq_tcga_inv <- as.data.frame(t(rna_seq_tcga))
+  rownames(rna_seq_tcga_inv) <- names(rna_seq_tcga)
+  
+  if (cohort != "LUNG"){
+    # Load clinical info
+    clin_info_tcga <- read_tsv(paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-", cohort,".pheno.tsv"), show_col_types = FALSE)
+  } else {
+    clin_info_tcga_luad <- read_tsv(paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-LUAD.pheno.tsv"), show_col_types = FALSE)
+    clin_info_tcga_lusc <- read_tsv(paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-LUSC.pheno.tsv"), show_col_types = FALSE)
+    clin_info_tcga <- rbind(clin_info_tcga_luad,clin_info_tcga_lusc)
+  }
+  
+  for (survival_type in survival_types){
+    for (stage in stages){
+      for (tissue_type in tissue_types){
+        stats_tab <- survival_analysis(rna_seq_tcga_inv, clin_info_tcga, survival_type, cohort, stage, tissue_type)
+        stats_final <- rbind(stats_final, stats_tab)
+      }
+    }
+  }
+  
+}
+```
+
+Summarize all information in one excel sheet.
+```{r}
+write.xlsx(stats_final,paste0("/gpfs/data/tsirigoslab/home/leh06/Others/NYU_RNA/surv_stats_nyustage1modules_on_tcga_norm.xlsx"))
+```
+
+Summarize all information in one excel sheet (filtered pval).
+```{r}
+stats_final_filtered <- stats_final[(stats_final$pval<0.05),]
+write.xlsx(stats_final_filtered,paste0("/gpfs/data/tsirigoslab/home/leh06/Others/NYU_RNA/surv_stats_nyustage1modules_on_tcga_norm_filtered.xlsx"))
+```
