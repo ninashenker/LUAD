@@ -1,0 +1,122 @@
+---
+  title: "Create figure for clinical variables. (figure 1 and supp figure 1)"
+output: html_document
+---
+
+
+```{r include=F, message=F,echo=F,warning=F,results='hide'}
+library(ggplot2)
+library(reshape2)
+library(tibble)
+library(ggrepel)
+library(survival)
+library(forestplot)
+library(survcomp)
+library(caret)
+library(GGally)
+library(glmnet)
+library(survcomp)
+
+outpath='figure5'
+if (!dir.exists(outpath))
+  dir.create(outpath,recursive = T)
+
+load('data/dot_association_normal.Rdata') #NYU association clinics data, module 20 survival,multivariate hazard ratio
+bb <- c(0.001,0.005,0.01,0.05)
+ll <- c("0.001","0.005","0.01","0.05") 
+res=module_association
+size_inflate=10
+p1=ggplot(data = res, aes(x = Module, y = Feature)) +
+  geom_point(data=res,alpha=0, color='white')+
+  geom_point(data=res[res$Pvalue<0.05,],aes(size =Pvalue, color = Association)) + 
+
+  scale_size_continuous(range = c(8,1),
+                        breaks=bb, labels=ll,limits=c(0,0.05))+
+  scale_color_manual(values=c('Negative'='blue','Positive'='red'))+
+  theme_bw()+
+  theme(
+    text = element_text(size = 26),
+    axis.text = element_text(size = 13 ),
+    legend.text = element_text(size =
+                                 15),
+    axis.text.x = element_text(angle = 45,hjust=1),
+    panel.border = element_rect(colour = "black", fill=NA, size=2))
+
+filename=paste0(outpath,'/fig5a_dot_association_normal_123vs0_2bins.png')
+
+ggsave(filename = filename,p1,device='png',width=12,height=8)
+
+###figure 5b
+curdata=module20
+groups=cut(rank(curdata$module),breaks=2,labels=c('Module Score Low','Module Score High'))
+
+surv_time=Surv(curdata$TTP,curdata$Progression)
+sdf=survdiff(surv_time~groups)
+p.val <- 1 - pchisq(sdf$chisq, length(sdf$n) - 1)  
+
+model_formula=as.formula(paste0('Surv(TTP,Progression)~',paste('module',collapse='+')))
+surv_fit=coxph(model_formula,curdata)
+
+
+###module 20 survival
+
+
+yLabels <- seq(0, 1.0, 0.1)
+filename=paste0(outpath,'/fig5b_surv_module_20.png')
+
+t11=survfit(surv_time~groups)
+p1=ggsurv(survfit(surv_time~groups),CI=F,size.est=1.5) +
+  geom_ribbon(aes(ymin=low,ymax=up,fill=group),alpha=0.3)+
+  xlab('Days Disease Free')+ylab('Disease Free')+ 
+  ggtitle(paste('Normal module 20 :',' P=', format(p.val,digits=3), ' Low/High Module score ', sum(groups=='Module Score Low'),'|',sum(groups=='Module Score High'),collapse='',sep=''))+
+  theme_classic()+ 
+  scale_y_continuous(limits=c(floor(min(t11$lower)*10)/10,1),breaks=yLabels, labels=sprintf(round(100*yLabels), fmt="%2.0f%%"))+
+  scale_color_manual(values=c('Module Score Low'='blue','Module Score High'='red'))+
+  scale_fill_manual(values=c('Module Score Low'='blue','Module Score High'='red'))+
+  theme(axis.text = element_text(size = 32),
+        axis.title = element_text(size = 25),
+        text = element_text(size = 10),
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=30),
+        panel.border = element_rect(colour = "black", fill=NA, size=2))+
+  guides(fill='none',linetype='none')
+
+ggsave(filename = filename,p1,device='png',width=12,height=8)
+
+###figure 5c
+
+curres=multivar_hr
+row_names=list(as.list(curres[,1]))
+row_names=curres[,c(1,2,5)]
+row_names=as.matrix(rbind.data.frame(names(row_names),row_names))
+curres=rbind.data.frame(rep(NA,1,5),curres)
+
+filename=paste0(outpath,'/fig5c_multivariate_forrestplot_normal.png')
+png(filename,width=2280,height=1480,units='px',res=200)
+own <- fpTxtGp(label = gpar(fontfamily = "Arial",cex=2.6),ticks = gpar(cex=2.5),
+               xlab  = gpar(fontfamily = 'Arial', cex = 2.8))
+#par(font = 29, cex = 5.3)
+forestplot(labeltext=row_names,graph.pos=3,
+           fn.ci_norm = fpDrawCircleCI,
+           curres[,c("Log_OR", "CI_Low", "CI_High")],
+           zero = 0,
+           cex  = 2.8,
+           lwd.ci=4,
+           ci.vertices=F,
+           txt_gp = own,
+           col=fpColors(box=c("red", "gold"),
+                        line=c("red", "orange"),
+                        summary=c("darkblue", "red")),
+           lineheight=unit(2,'cm'),
+           mar = unit(c(1,1,1,1), "mm"),
+           graphwidth=unit(8,"cm"),
+           boxsize=0.30,
+           confintNormalFn=c( "fpDrawCircleCI"),
+           xlab = "Log OR",
+           xticks = seq(from =-1, to = 1.5, by = 0.5),
+)
+dev.off()
+
+```
+
+
