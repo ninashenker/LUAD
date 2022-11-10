@@ -1,0 +1,208 @@
+---
+title: "TCGA gene expression download and cleanup"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    theme: readable
+    code_folding: none
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(janitor)
+  library(glue)
+  library(cowplot)
+  library(scales)
+  library(broom)
+})
+```
+
+gene expression RNAseq - HTSeq counts log2(count+1)
+
+```{r import-expression, include=FALSE}
+exp_tsv = "https://gdc.xenahubs.net/download/TCGA-LUAD.htseq_counts.tsv.gz"
+exp_tbl = data.table::fread(exp_tsv, sep = "\t", data.table = FALSE)
+exp_tbl = exp_tbl %>% rename(gene_id = Ensembl_ID)
+```
+
+```{r}
+dim(exp_tbl)
+```
+
+```{r}
+exp_tbl[1:5, 1:5]
+```
+import gene names
+
+```{r import-gene-map,include=FALSE}
+gene_map_tsv = "https://gdc.xenahubs.net/download/gencode.v22.annotation.gene.probeMap"
+gene_map_tbl = data.table::fread(gene_map_tsv, sep = "\t", data.table = FALSE)
+gene_map_tbl = gene_map_tbl %>% select(gene_id = id, gene_name = gene)
+dim(gene_map_tbl)
+```
+
+```{r}
+head(gene_map_tbl)
+```
+
+```{r}
+exp_tbl = inner_join(gene_map_tbl, exp_tbl, by = "gene_id")
+exp_tbl = exp_tbl %>% select(-gene_id)
+dim(exp_tbl)
+```
+
+```{r}
+exp_tbl[1:5, 1:5]
+```
+
+import phenotypes
+
+```{r import-phenotypes, include=FALSE}
+pheno_tsv = "https://gdc.xenahubs.net/download/TCGA-LUAD.GDC_phenotype.tsv.gz"
+pheno_tbl = data.table::fread(pheno_tsv, sep = "\t", data.table = FALSE)
+pheno_tbl = pheno_tbl %>% rename(sample_name = submitter_id.samples)
+```
+
+```{r}
+dim(pheno_tbl)
+```
+
+```{r}
+pheno_tbl[1:5, 1:5]
+```
+
+filter based on samples
+
+```{r}
+relevant_samples = intersect(colnames(exp_tbl), pheno_tbl$sample_name)
+length(relevant_samples)
+```
+
+```{r filter-expression}
+exp_tbl = exp_tbl %>% select(gene_name, one_of(relevant_samples))
+dim(exp_tbl)
+```
+
+```{r filter-phenotypes}
+pheno_tbl = pheno_tbl %>% filter(sample_name %in% relevant_samples) %>% arrange(sample_name)
+dim(pheno_tbl)
+```
+
+check sample types
+
+```{r}
+pheno_tbl %>% count(sample_type.samples)
+```
+
+```{r}
+pheno_tbl %>% count(tumor_stage.diagnoses)
+```
+
+convert expression values to non-log values
+
+```{r}
+# can try one column at a time to avoid memory issues
+# for (i in 2:ncol(exp_tbl)) {
+#   exp_tbl[, i] = (2 ^ exp_tbl[, i] - 0.001) %>% round(3)
+# }
+exp_tbl[, 2:ncol(exp_tbl)] = 2 ^ exp_tbl[, 2:ncol(exp_tbl)] - 1
+```
+
+```{r}
+exp_tbl[1:5, 1:5]
+```
+
+```{r}
+exp_tbl[, 2:ncol(exp_tbl)] %>% colSums() %>% quantile() %>% scales::comma()
+```
+
+convert values to integers
+
+```{r}
+str(exp_tbl[, 1:5])
+```
+
+```{r}
+exp_tbl = exp_tbl %>% mutate(across(where(is.numeric), round, 0))
+exp_tbl = exp_tbl %>% mutate(across(where(is.numeric), as.integer))
+```
+
+```{r}
+str(exp_tbl[, 1:5])
+```
+
+```{r}
+exp_tbl[, 2:ncol(exp_tbl)] %>% colSums() %>% quantile() %>% scales::comma()
+```
+
+filter not expressed genes
+
+```{r}
+exp_tbl$mean_exp = exp_tbl[, 2:ncol(exp_tbl)] %>% rowMeans()
+quantile(exp_tbl$mean_exp, seq(0, 1, 0.1)) %>% round(1)
+```
+
+```{r}
+exp_tbl = exp_tbl %>% filter(mean_exp > 0) 
+nrow(exp_tbl)
+```
+
+```{r}
+exp_tbl = exp_tbl %>% group_by(gene_name) %>% arrange(gene_name, -mean_exp) %>% slice(1) %>% ungroup()
+exp_tbl = exp_tbl %>% select(-mean_exp) %>% arrange(gene_name)
+nrow(exp_tbl)
+```
+
+```{r}
+exp_tbl[1:10, 1:5]
+```
+
+histogram of values
+
+```{r}
+hist(as.matrix(exp_tbl[, 2:ncol(exp_tbl)]), breaks = 50, col = "gray20")
+```
+
+```{r}
+hist(log2(as.matrix(exp_tbl[, 2:ncol(exp_tbl)]) + 1), breaks = 50, col = "gray20")
+```
+
+check column sums after all the filters
+
+```{r}
+exp_tbl[, 2:ncol(exp_tbl)] %>% colSums() %>% quantile() %>% scales::comma()
+```
+
+plot total counts
+
+```{r}
+counts_plot =
+  exp_tbl[, 2:ncol(exp_tbl)] %>%
+  colSums() %>%
+  enframe(name = "sample_name", value = "assigned_counts") %>%
+  ggplot() +
+  geom_col(
+    aes(x = fct_reorder(sample_name, assigned_counts, .desc = TRUE), y = assigned_counts),
+    width = 1
+  ) +
+  scale_y_continuous(expand = c(0, 0), labels = comma, breaks = seq(0, 100^6, by = 10*10^6)) +
+  labs(x = "sample", y = "assigned counts") +
+  theme_cowplot() +
+  theme(
+    axis.text.x = element_text(size = 4, angle = 90, hjust = 1),
+    panel.grid.major.y = element_line(colour = "gray50", linetype = "dotted")
+  )
+save_plot(filename = glue("./data/TCGA-LUAD.qc-counts-num.png"), plot = counts_plot,
+          base_width = 10, base_height = 5)
+counts_plot
+```
+
+save
+
+```{r}
+saveRDS(pheno_tbl, glue("./data/TCGA-LUAD.pheno.rds"))
+write_tsv(pheno_tbl, glue("./data/TCGA-LUAD.pheno.tsv"))
+saveRDS(exp_tbl, glue("./data/TCGA-LUAD.exp.counts.rds"))
+write_tsv(exp_tbl, glue("./data/TCGA-LUAD.exp.counts.tsv.gz"))
+```
