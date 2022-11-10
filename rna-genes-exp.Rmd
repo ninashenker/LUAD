@@ -1,0 +1,99 @@
+---
+title: "subset gene expression matrix"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    theme: readable
+    code_folding: none
+---
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(glue)
+})
+```
+
+# define inputs/outputs
+
+```{r}
+subset_label = "246samples"
+
+vst_csv = "data/rna-counts-vst-n246.csv.gz"
+if (!file.exists(vst_csv)) stop()
+
+genes_csv = "data/rna-genes.csv"
+if (!file.exists(genes_csv)) stop()
+```
+
+```{r}
+num_var_genes = 10000
+```
+
+```{r}
+out_dir = glue("./out-genes-exp")
+if (!dir.exists(out_dir)) { dir.create(out_dir) }
+```
+
+# import data
+
+```{r}
+vst_tbl = read_csv(vst_csv, show_col_types = FALSE)
+dim(vst_tbl)
+```
+
+```{r}
+genes_tbl = read_csv(genes_csv, show_col_types = FALSE)
+dim(genes_tbl)
+```
+
+# prepare data
+
+check expression table
+
+```{r}
+vst_tbl[1:5, 1:5]
+```
+
+check genes table
+
+```{r}
+head(genes_tbl)
+```
+
+get protein coding genes
+
+```{r}
+relevant_genes = genes_tbl %>% filter(gene_type == "protein_coding") %>% pull(gene_name) %>% unique()
+length(relevant_genes)
+```
+
+subset to coding genes
+
+```{r}
+vst_mat = vst_tbl %>% as.data.frame() %>% column_to_rownames("gene") %>% as.matrix()
+dim(vst_mat)
+vst_mat %>% rowMeans() %>% quantile() %>% round(3)
+```
+
+```{r}
+vst_mat = vst_mat[relevant_genes, ]
+dim(vst_mat)
+vst_mat %>% rowMeans() %>% quantile() %>% round(3)
+```
+
+select most variable genes
+
+```{r}
+rv = matrixStats::rowVars(vst_mat)
+select = order(rv, decreasing = TRUE)[1:num_var_genes]
+vst_mat = vst_mat[select, ]
+vst_mat = vst_mat[sort(rownames(vst_mat)), ]
+dim(vst_mat)
+vst_mat %>% rowMeans() %>% quantile() %>% round(3)
+```
+
+```{r}
+vst_mat %>% as_tibble(rownames = "gene") %>%
+  write_csv(glue("{out_dir}/{subset_label}.exp.vst.coding{num_var_genes}.csv.gz"))
+```
