@@ -1,5 +1,8 @@
 # Inflammation in the tumor-adjacent lung as a predictor of clinical outcome in early-stage lung adenocarcinoma
 
-Early Stage Lung Adenocarcinoma - Prediction of Recurrence
+This code is for the analysis corresponding to the manuscript.
 
-For data demongraphics plots and machine learning models, the codes are in folder ML, the codes are ordered by figure number and the data used for all plotting are in the data folder, the codes can be directly run in Rstudio. 
+The scripts are organized in R Markdown notebooks.
+Each notebook provides a description of the overall task and intermediate steps.
+
+For data demographics plots and machine learning models, the codes are in folder ML ordered by figure number and the data used for all plotting are in the data folder, the codes can be directly run in Rstudio. 
