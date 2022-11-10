@@ -95,7 +95,6 @@ filename=paste0(outpath,'/supp_fig7c_multivariate_forrestplot_tumor.png')
 png(filename,width=2280,height=1480,units='px',res=200)
 own <- fpTxtGp(label = gpar(fontfamily = "Arial",cex=2.6),ticks = gpar(cex=2.5),
                xlab  = gpar(fontfamily = 'Arial', cex = 2.8))
-#par(font = 29, cex = 5.3)
 forestplot(labeltext=row_names,graph.pos=3,
            fn.ci_norm = fpDrawCircleCI,
            curres[,c("Log_OR", "CI_Low", "CI_High")],
