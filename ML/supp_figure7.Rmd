@@ -1,5 +1,5 @@
 ---
-  title: "Create figure for clinical variables. (figure 1 and supp figure 1)"
+  title: "Create supp figure 7"
 output: html_document
 ---
 ```{r include=F, message=F,echo=F,warning=F,results='hide'}
