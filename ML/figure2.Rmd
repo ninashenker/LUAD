@@ -1,13 +1,83 @@
 ---
-  title: "Create figure for clinical variables. (figure 2 and supp figure 2)"
+  title: "Plots for figure 2"
 output: html_document
 ---
+###read in data
 ```{r include=F, message=F,echo=F,warning=F,results='hide'}
+subjs=read.csv('data/NYU_meta.csv',header=T,stringsAsFactors = F,check.names=F)
 
+##keep only stage I
+subjs=subjs[subjs$stage %in% c('IA','IB','1'),]  #150 to 145 patients
+nyu=data.frame(subjs=subjs$Study_ID,subtype=subjs$ProgType,time=as.numeric(subjs$`Time to Recurrence`),status=subjs$Progression,stringsAsFactors = F)
+
+sex=rep('Male',nrow(subjs))
+sex[subjs$Male_1==2]='Female'
+data=data.frame(subjs,
+                followup=as.numeric(subjs$`Time to Recurrence`),histology=subjs$Histologic_component_of_hot_spot_of_nuclear_atypia,
+                match_normal=subjs$match_normal,stringsAsFactors = F)
+data$Race[data$Race=='white']='White'
+data$Race[data$Race=='Hipanic or Latino']='Hispanic'
+data$Race[data$Race=='asian']='Asian'
+data$Race[data$Race=='Black or African America']='Black'
+data$Race=factor(data$Race,levels=c('White','Asian','Black','Hispanic'))
+
+data$LVI=factor(data$LVI,levels=c(0,1),labels=c('No','Yes'))
+
+data$Pleural_Invasion=factor(data$Pleural_Invasion,levels=c(0,1),labels=c('No','Yes'))
+
+data$Sex=factor(data$Male_1,levels=c(2,1),labels=c('Female','Male'))
+data$nuclear_histology=data$Histologic_component_of_hot_spot_of_nuclear_atypia
+data$nuclear_histology[data$nuclear_histology=='n.a']='Unknown'
+
+data$LepidicPerc=as.numeric(data$LepidicPerc)
+data$MicropapillaryPerc=as.numeric(data$MicropapillaryPerc)
+data$Necrosis_Perc=as.numeric(data$Necrosis_Perc)
+data$Nuclear_grade=as.numeric(data$Nuclear_grade)
+data$smoking_Pack_Years=as.numeric(data$smoking_Pack_Years)
+data$PapillaryPerc=as.numeric(data$PapillaryPerc)
+data$SolidPerc=as.numeric(data$SolidPerc)
+data$AcinarPerc=as.numeric(data$AcinarPerc)
+data$CribriformPerc=as.numeric(data$CribriformPerc)
+data$Fused_glandsPerc=as.numeric(data$Fused_glandsPerc)
+data$Cytologic_grade[data$Cytologic_grade=='n.a']=NaN
+data$Cytologic_grade=factor(data$Cytologic_grade,levels=c('Low','High'))
+data$nuclear_histology=factor(data$nuclear_histology,levels=c( 'Unknown',"Fused glands", "Micropapillary", "Solid", "Papillary", "Acinar" , "Cribriform","Lepidic"  ))
+features=c('Progression','Time.to.Recurrence','Race','Sex','Age','smoking_Pack_Years','Cytologic_grade','Size_cm','LVI','Pleural_Invasion','AcinarPerc','LepidicPerc','MicropapillaryPerc','Necrosis_Perc',
+           'PapillaryPerc','SolidPerc','CribriformPerc','Fused_glandsPerc','Nuclear_grade')
+data=data[data$match_normal,features]##only doing with matched normal
+clinics=data
+names(data)[1]='Recur'
+data[data==-9]=0
+
+###get figure 2 roc curve data
+
+varcut=200
+datamod='normalized'
+datasubset='matched_rm5years'
+subset='12vs0'
+datatypes=c('tumor','control')
+fold=10
+ind_censor=1
+ind_time=2
+subjs=read.csv('data/NYU_meta.csv',header=T,stringsAsFactors = F)
+
+pred_data=list()
+for (i in 1:length(datatypes)) {
+  datatype=datatypes[i]
+  temp=read.csv(paste0('data/models/',datamod,'_',datasubset,'_',datatype,'_fpkm_',subset,'_glm_v',varcut,'_pred_prob.csv'),stringsAsFactors = F,check.names=F)
+  temp=temp[temp$bootid==1,]
+  set.seed(1)
+  curind=match(temp$subj,subjs$Study_ID)
+  temp$Progression=as.numeric(subjs$Progression[curind])
+  temp$TTP=as.numeric(subjs$Time.to.Recurrence[curind])
+  pred_data[[i]]=temp}
+```
+
+
+```{r include=F, message=F,echo=F,warning=F,results='hide'}
 outpath='figure2'
 if (!dir.exists(outpath))
   dir.create(outpath,recursive = T)
-
 varcut=200
 datamod='normalized'
 datasubset='matched_rm5years'
@@ -18,7 +88,6 @@ ind_censor=1
 ind_time=2
 
 auc_labels=c('AUC = 0.63 (0.53~0.72)','AUC = 0.83 (0.74~0.92)')
-load('data/ml_pred.Rdata') ##NYU prediction data
 for (i in 1:length(datatypes)) {
   datatype=datatypes[i]
   auc_label=auc_labels[i]
@@ -53,7 +122,6 @@ for (i in 1:length(datatypes)) {
 
 
 ###supp figure 2 forest plot of hazard ratio on clinical data
-load('data/NYU_survival.Rdata') ##nyu survival and clinics data
 ind_time=2
 res=data.frame(matrix(NaN,0,5))
 names(res)=c('var','sub_var','N','Hazard_Ratio','Pvalue')
@@ -65,7 +133,6 @@ for (i in 1:length(features)) {
                                  paste(features[i],collapse="+")))
   
   surv_fit1=coxph(as.formula(model_formula),data)
-  # 
   coef=summary(surv_fit1)$coefficients
   
   curres=data.frame(matrix(NaN,20,5))
@@ -97,7 +164,7 @@ for (i in 1:length(features)) {
         coef[j,1]=0
         coef[j,3]=10
         coef[j,5]=1.0}
-      if (abs(coef[j,2]/coef[j,1]) >10 || coef[j,1]>13)  {  ####manually correct large standard error
+      if (abs(coef[j,2]/coef[j,1]) >10 || coef[j,1]>13)  {  #### correction for large standard error
         coef[j,1]=coef[j,1]/coef[j,3]
         coef[j,3]=coef[j,3]/coef[j,3]
       }
@@ -115,12 +182,10 @@ res=res[!is.na(res[,1]) & res[,1]!='NaN',]
 
 
 ###plottting forest
-
 maxval=5
 temp=res
 data=data.frame(matrix(NaN,50,7))
 names(data)=c('Variable','N','AUC','CI_low','CI_high','','P')
-
 vars=unique(temp$var)
 cnt=0
 for (i in 1:length(vars)) {
@@ -149,8 +214,6 @@ for (i in 1:length(vars)) {
         
         data[cnt,6]=paste0(maxval,strsplit(data[cnt,6],' ')[[1]][2]) 
       }
-      
-      
       data[cnt,7]=sprintf('%.3f',round(  temp$Pvalue[j],3))  
     } } else {
       ind=temp$var==vars[i]
@@ -164,7 +227,6 @@ for (i in 1:length(vars)) {
       if (data[cnt,5]>maxval) {
         data[cnt,5]=maxval
         data[cnt,6]=paste0(strsplit(temp$Hazard_Ratio[ind],'~')[[1]][1],'~200)') }
-      
       data[cnt,7]=sprintf('%.3f',round( temp$Pvalue[ind],3)) 
     }
 }
@@ -178,10 +240,7 @@ for (i in 1:nrow(data)) {
 row_names=list(as.list(c('Variable',data$Variable)),as.list(c('N',data$N)),as.list(c('',data[,6])),as.list(c('P',data$P)))
 data=rbind.data.frame(rep(NA,1,7),data)
 
-
-
 pdf( paste('figure2/supp_fig2_log_Hazard_Ratio.pdf',sep=''),width=10,height=14)
-
 own <- fpTxtGp(label = gpar(fontfamily = "ArialMT",cex=1.2),ticks = gpar(cex=1.0),xlab=gpar(cex=1.8))
 ticks <- seq(-5,5, 1)
 ticks=c(-5, -3, -1,  0,1,  3,  5)
@@ -192,7 +251,6 @@ forestplot(labeltext=row_names,graph.pos=3,
            cex  = 2.2,
            lwd.ci=2,
            xlog=0,
-           #ci.vertices=T,
            txt_gp = own,
            col=fpColors(box=c("black", "gold"),
                         line=c("black", "orange"),
@@ -200,12 +258,9 @@ forestplot(labeltext=row_names,graph.pos=3,
            lineheight = "auto",
            boxsize=0.45,
            xlab = "log (Hazard Ratio)",
-           
            xticks=ticks,
-           #xticks = seq(from =0.4, to = 1, by = 0.1),
            new_page = FALSE)
 
 dev.off()
-
 ```
 

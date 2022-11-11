@@ -19,10 +19,100 @@ if (!dir.exists(outpath))
   dir.create(outpath,recursive = T)
 ```
 
+###read in data
+```{r include=F, message=F,echo=F,warning=F,results='hide'}
+#origdata: LUAD+NYU dataset, origdata_rnaseq: LUAD+NYU removing subjs without rnaseq data, NYU: NYU dataset, NYU2: NYU data with known histology
+subjs=read.csv('data/NYU_meta.csv',stringsAsFactors = F,check.names=F)
 
+##keep only stage I
+subjs=subjs[subjs$stage %in% c('IA','IB','1'),]  #150 to 145 patients
+
+nyu=data.frame(subjs=subjs$Study_ID,subtype=subjs$ProgType,time=as.numeric(subjs$`Days_to_Death or Last Contact`),status=subjs$Dead_or_alive,stringsAsFactors = F)
+
+nyu$subtype[nyu$subtype==1]='Systemic'
+nyu$subtype[nyu$subtype==2]='Locoregional'
+nyu$subtype[nyu$subtype==3]='Second Primary'
+nyu=nyu[nyu$subtype !='No Recurrence',]
+nyu$subtype=factor(nyu$subtype,levels=c('No Recurrence',"Systemic", "Locoregional",  "Second Primary"))
+
+nyu_surv=nyu
+clinical=read.csv('data/LUAD_clinicalMatrix.tsv',header=T,check.names = F,sep='\t',stringsAsFactors = F)
+
+origsurvd=read.csv('data/LUAD_survival.tsv',header=T,check.names = F,sep='\t',stringsAsFactors = F)
+stages=c('stage_1','stage_12','stage_3','stage_4','stage_ALL')
+stages_list=list(stage1=c('Stage I','Stage IA','Stage IB'),stage2=c('Stage II','Stage IIA','Stage IIB'),
+                 stage3=c('Stage IIIA','Stage IIIB'),stage4=c('Stage IV'))
+
+subjs=union(clinical$sampleID[clinical$new_neoplasm_event_type !=''], origsurvd$sample[origsurvd$DSS==0])
+subjs=intersect(clinical$sampleID,subjs)
+subjs=clinical$sampleID
+subtype=clinical$new_neoplasm_event_type[match(subjs,clinical$sampleID)]
+subtype[subjs %in% origsurvd$sample[origsurvd$DSS==0]]='No Recurrence'
+subtype[subtype %in% c('Distant Metastasis|New Primary Tumor','Distant Metastasis')]='Systemic'
+subtype[subtype %in% c('Locoregional Recurrence|Distant Metastasis','Locoregional Recurrence')]='Locoregional'
+subtype[subtype %in% c('New Primary Tumor')]='Second Primary'
+ind=match(subjs,clinical$sampleID)
+
+stage=rep('',length(subjs))
+
+tt=clinical$pathologic_stage[ind]
+stage[tt %in% stages_list[[1]]]='TCGA/Stage I'
+stage[tt %in% stages_list[[2]]]='TCGA/Stage II'
+stage[tt %in% stages_list[[3]]]='TCGA/Stage III'
+stage[tt %in% stages_list[[4]]]='TCGA/Stage IV'
+normal=clinical$sampleID[clinical$sample_type %in% "Solid Tissue Normal"]
+normal=sapply(normal,substr,1,12)
+luad=data.frame(subjs=subjs,stage=stage,subtype=subtype,status=origsurvd$DSS[match(subjs,origsurvd$sample)],
+                Age=clinical$age_at_initial_pathologic_diagnosis[ind],sex=clinical$gender[ind],
+                pack_years=clinical$number_pack_years_smoked[ind],
+                followup=origsurvd$DSS.time[match(subjs,origsurvd$sample)], histology=clinical$histological_type[ind],
+                match_normal=sapply(subjs,substr,1,12) %in% normal,
+                stringsAsFactors = F)
+
+luad=luad[luad$stage !='',]
+luad$normal=0
+luad$normal[grepl('-11',luad$subjs)]=1
+luad_rnaseq=luad[luad$subjs %in% clinical$sampleID[clinical$rnaseq],]
+luad_rnaseq$match_normal=sapply(luad_rnaseq$subjs,substr,1,12) %in% sapply(luad_rnaseq$subjs[luad_rnaseq$normal==1],substr,1,12)
+
+###read in NYU data
+
+subjs=read.csv('data/NYU_meta.csv',stringsAsFactors = F,check.names=F)
+
+##keep only stage I
+subjs=subjs[subjs$stage %in% c('IA','IB','1'),]  #150 to 145 patients
+subtype=rep('No Recurrence',nrow(subjs))
+subtype[subjs$ProgType==1]='Systemic'
+subtype[subjs$ProgType==2]='Locoregional'
+subtype[subjs$ProgType==3]='Second Primary'
+subtype=factor(subtype,levels=c("No Recurrence" ,"Systemic", "Locoregional",  "Second Primary"))
+
+sex=rep('MALE',nrow(subjs))
+sex[subjs$Male_1==2]='FEMALE'
+nyu=data.frame(subjs=subjs$Study_ID,stage=rep('NYU/Stage I',nrow(subjs)),subtype=subtype,status=subjs$Progression,
+               Age=subjs$Age,sex=sex,
+               pack_years=as.numeric(subjs$smoking_Pack_Years),
+               followup=as.numeric(subjs$`Time to Recurrence`),histology=subjs$Histologic_component_of_hot_spot_of_nuclear_atypia,
+               match_normal=subjs$match_normal,
+               normal=1,
+               IASLC_grade=subjs$`FINAL IASLC GRADE MOREIRA`,stringsAsFactors = F)
+
+nyu$normal[nyu$match_normal==0]=0
+origdata=rbind.data.frame(luad,nyu[,-12])
+origdata$stage=factor(origdata$stage,levels=rev(c("NYU/Stage I" ,   "TCGA/Stage I" ,  "TCGA/Stage II" , "TCGA/Stage III", "TCGA/Stage IV" )))
+origdata_rnaseq=rbind.data.frame(luad_rnaseq,nyu[,-12])
+origdata_rnaseq$stage=factor(origdata_rnaseq$stage,levels=rev(c("NYU/Stage I" ,   "TCGA/Stage I" ,  "TCGA/Stage II" , "TCGA/Stage III", "TCGA/Stage IV" )))
+
+nyu$cytology_grade=subjs$Cytologic_grade[match(nyu$subjs,subjs$Study_ID)]
+nyu$Progression=rep("Recurrence",nrow(nyu))
+nyu$Progression[nyu$status==0]='No Recurrence'
+
+nyu2=nyu[nyu$histology!='n.a',]
+nyu2$histology=factor(nyu2$histology)
+nyu2$IASLC_grade=factor(nyu2$IASLC_grade)
+```
 #figure 1b
 ```{r include=False, warning=False, echo=False, message=False}
-load('data/tcga_nyu.Rdata')  #origdata: LUAD+NYU dataset, origdata_rnaseq: LUAD+NYU removing subjs without rnaseq data, NYU: NYU dataset, NYU2: NYU data with known histology
 data=origdata_rnaseq[(origdata_rnaseq$stage=='NYU/Stage I' & origdata_rnaseq$normal==1) | (origdata_rnaseq$stage!='NYU/Stage I' & origdata_rnaseq$normal==0),]
 data=origdata[(origdata$stage=='NYU/Stage I' & origdata$normal==1) | (origdata$stage!='NYU/Stage I' & origdata$normal==0 ) & origdata$subtype !='' ,]
 
@@ -65,9 +155,7 @@ p1 <- ggplot(data, aes(x=stage, y=followup)) +
         legend.title=element_text(size=50))+coord_flip()
 filename=paste(outpath,'/fig1c_followup_boxplot.png',collapse='',sep='')
 ggsave(filename = filename,p1,device='png',width=8,height=6)
-
 ```
-
 
 
 ###figure 1d, recurrent counts in tumor
@@ -98,8 +186,6 @@ ggsave(paste0(outpath, '/fig1d_count_with_matched_normal.png'), device='png',p1,
 ```
 
 ###NYU survival, figure 1e
-
-
 ```{r include=False, warning=False, echo=False, message=False}
 nyu_surv
 png(paste0(outpath,'/fig1e_surv.png'),width=8,height=6,units='in',res=300)
@@ -117,7 +203,6 @@ plot(survfit(surv_time~groups_bin), lwd=4.1,cex.axis=2,cex.lab=3.2, xaxt='n',yax
 box(lwd=3)
 yLabels <- seq(0, 1.0, 0.1)
 legend( "bottomleft",lty=1,lwd=6,col=cols,  legend=levels(groups_bin),cex=1.6,box.col='white')
-#axis(1,gap.axis=5)
 axis(side=1,padj=0.7,at=c(seq(from=0,to=4000,by=1000)),labels=c(seq(from=0,to=4000,by=1000)),cex.axis=2) 
 yLabels <- seq(0, 1.0, 0.2)
 axis(2, at=yLabels, labels=sprintf(round(100*yLabels), fmt="%2.0f%%"), las=1,cex.axis=2)
@@ -134,9 +219,7 @@ dev.off()
 ####supplement figure 1
 
 ```{r include=False, warning=False, echo=False, message=False}
-
 ##age
-
 data=origdata[(origdata$stage=='NYU/Stage I' & origdata$normal==1) | (origdata$stage!='NYU/Stage I' & origdata$normal==0  & origdata$subtype !=''),]
 
 data$Age=as.numeric(data$Age)
@@ -158,7 +241,6 @@ ggsave(paste0(outpath, '/supp_fig1a_age.png'), p1,device='png',width=14,height=9
 
 
 ##pack years
-
 p1=ggplot(data, aes(x = stage, y = pack_years))+
   geom_boxplot(lwd=1,outlier.shape = NA)+
   geom_jitter(shape=16, position=position_jitter(0.2),size=3)+
@@ -178,7 +260,6 @@ p1=ggplot(data, aes(x = stage, y = pack_years))+
 ggsave(paste0(outpath, '/supp_fig1b_pack_years.png'),device='png', p1,width=13,height=9)
 
 ###age by recurrence status
-
 distinct_cols= c('#0000FF', '#FF0000', '#00FF00', '#00002C', '#FF1AB9', '#FFD300', '#005800', 
                  '#8484FF', '#9E4F46', '#00FFC1', '#008495', '#00007B', '#95D34F', '#F69EDC', '#D312FF',
                  '#7B1A6A', '#F61261', '#FFC184', '#232309', '#8DA77B', '#F68409', '#847200', '#72F6FF', 
@@ -201,12 +282,9 @@ p1=ggplot(nyu, aes(x = Progression, y = Age))+
         legend.text=element_text(size=30),
         legend.title=element_text(size=50),
         panel.border = element_rect(colour = "black", fill=NA, size=2))
-
-
 ggsave(paste0(outpath, '/supp_fig1c_age.png'), p1,device='png',width=10,height=9)
 
 ##pack years by recurrence status
-
 p1=ggplot(nyu, aes(x = Progression, y = pack_years))+
   geom_boxplot(lwd=1,outlier.shape = NA)+
   geom_jitter(shape=16, position=position_jitter(0.2),size=4)+
@@ -216,7 +294,6 @@ p1=ggplot(nyu, aes(x = Progression, y = pack_years))+
   theme(axis.text = element_text(size = 42),
         axis.title = element_text(size = 45),
         text = element_text(size = 10),
-        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=0),
         plot.title = element_text(hjust = 0.5),
         legend.text=element_text(size=30),
         legend.title=element_text(size=50),
@@ -224,17 +301,12 @@ p1=ggplot(nyu, aes(x = Progression, y = pack_years))+
 
 
 ggsave(paste0(outpath, '/supp_fig1d_pack_years.png'), p1,device='png',width=10,height=9)
-
-
 ##sex by recurrence status
 p1=ggplot(nyu, aes( x=Progression,fill=sex)) + 
   geom_bar(position="fill",width=0.7)+
-  #  annotate(geom="text", x=1.2, y=1.2, label=sprintf('pval = %.2f',pval),
-  #          color="red",cex=8.3) +
-  scale_fill_manual(values=distinct_cols[1:8])+
+ scale_fill_manual(values=distinct_cols[1:8])+
   labs(x='Progression',
        y='Percentage',title='Sex')+
-  
   theme_classic()+
   theme(axis.text = element_text(size = 30),
         axis.title = element_text(size = 45),
@@ -247,11 +319,8 @@ p1=ggplot(nyu, aes( x=Progression,fill=sex)) +
 ggsave(paste0(outpath, '/supp_fig1e_sex.png'), p1,device='png',width=10,height=7)
 
 ##histology by recurrence status
-
 p1=ggplot(nyu2, aes( x=Progression,fill=histology)) + 
   geom_bar(position="fill",width=0.7)+
-  #  annotate(geom="text", x=1.2, y=1.2, label=sprintf('pval = %.2f',pval),
-  #          color="red",cex=8.3) +
   scale_fill_manual(values=distinct_cols[1:8])+
   labs(x='Progression',
        y='Percentage')+
@@ -259,17 +328,15 @@ p1=ggplot(nyu2, aes( x=Progression,fill=histology)) +
   theme(axis.text = element_text(size = 35),
         axis.title = element_text(size = 45),
         text = element_text(size = 10),
-        # axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10),
         legend.text=element_text(size=30),
         legend.title=element_text(size=50),
         panel.border = element_rect(colour = "black", fill=NA, size=2))
 ggsave(paste0(outpath, '/supp_fig1f_histology.png'), p1,device='png',width=12,height=8)
+
 #iaslc_grade by recurrence
 
 p1=ggplot(nyu2, aes( x=Progression,fill=IASLC_grade)) + 
   geom_bar(position="fill",width=0.7)+
-  #  annotate(geom="text", x=1.2, y=1.2, label=sprintf('pval = %.2f',pval),
-  #          color="red",cex=8.3) +
   scale_fill_manual(values=distinct_cols[1:8])+
   labs(x='Progression',
        y='Percentage')+
