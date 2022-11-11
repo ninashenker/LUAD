@@ -1,0 +1,517 @@
+---
+title: "gene modules scores/expression plots"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    theme: readable
+    code_folding: none
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(glue)
+  library(cowplot)
+  library(RColorBrewer)
+  library(ggbeeswarm)
+})
+```
+
+output dir
+
+```{r}
+subset_label = "246samples"
+
+num_var_genes = 10000
+pca_dims = 10
+
+n_clust = 20
+
+out_dir = glue("./out-modules-scores")
+if (!dir.exists(out_dir)) { dir.create(out_dir) }
+out_prefix = glue("{out_dir}/{subset_label}.coding{num_var_genes}.modules.dim{pca_dims}.k{n_clust}")
+
+# modules_csv = glue("./out-modules-generate/{subset_label}.coding{num_var_genes}.modules.dim{pca_dims}.k{n_clust}.genes.csv")
+modules_csv = "data/rna-genes-modules.csv"
+if (!file.exists(modules_csv)) stop()
+# scores_csv = glue("./out-modules-generate/{subset_label}.coding{num_var_genes}.modules.dim{pca_dims}.k{n_clust}.scores.csv")
+scores_csv = "data/rna-modules-scores-n246.csv"
+if (!file.exists(scores_csv)) stop()
+```
+
+# import data
+
+import sample info
+
+```{r message=FALSE, warning=FALSE}
+samples_tbl = read_csv("data/rna-samples-n246.csv", show_col_types = FALSE) %>%
+  rename(sample_name = `#SAMPLE`) %>%
+  mutate(progtype = str_c(type, "-", progtype)) %>%
+  arrange(sample_name)
+```
+
+```{r}
+samples_tbl
+```
+
+import modules
+
+```{r message=FALSE, warning=FALSE}
+modules_tbl = read_csv(modules_csv, show_col_types = FALSE)
+```
+
+```{r}
+head(modules_tbl)
+```
+
+```{r}
+modules_tbl %>% count(module)
+```
+
+import module scores
+
+```{r}
+scores_tbl = read_csv(scores_csv, show_col_types = FALSE)
+```
+
+```{r}
+head(scores_tbl)
+```
+
+# clean up
+
+```{r}
+table(samples_tbl$progtype)
+```
+
+```{r}
+samples_tbl$progtype = str_replace(samples_tbl$progtype, "Recurrence-SecondaryPrimary", "SecondaryPrimary")
+table(samples_tbl$progtype)
+```
+
+reorder groups
+
+```{r}
+progtype_order =
+  c(
+    "N-NoRecurrence", "N-SecondaryPrimary", "N-Recurrence-Locoregional", "N-Recurrence-Systemic",
+    "T-NoRecurrence", "T-SecondaryPrimary", "T-Recurrence-Locoregional", "T-Recurrence-Systemic"
+  )
+samples_tbl$progtype = factor(samples_tbl$progtype, levels = progtype_order)
+levels(samples_tbl$progtype)
+```
+
+```{r}
+progtype_colors =
+  c(
+    ggsci::rgb_material("blue", reverse = TRUE, n = 5)[4:1],
+    ggsci::rgb_material("red", reverse = TRUE, n = 5)[4:1]
+  )
+names(progtype_colors) = progtype_order
+progtype_colors
+```
+
+get average expression per module
+
+```{r}
+modules_list = split(x = modules_tbl$gene, f = modules_tbl$module)
+str(modules_list)
+```
+
+```{r}
+scores_mat = scores_tbl %>% column_to_rownames("module") %>% as.matrix()
+scores_mat[, 1:5]
+```
+
+```{r}
+scores_mat %>% quantile() %>% round(3)
+```
+
+# plot
+
+combine samples and scores
+
+```{r}
+scores_long_tbl =
+  scores_mat %>% t() %>% as_tibble(rownames = "sample_name") %>%
+  pivot_longer(!sample_name, names_to = "module", values_to = "exp")
+head(scores_long_tbl)
+```
+
+```{r}
+plot_tbl = inner_join(samples_tbl, scores_long_tbl, by = "sample_name")
+plot_tbl
+```
+
+filter table by followup time
+
+```{r}
+table(plot_tbl$progression5y)
+```
+
+```{r}
+plot_5y_tbl = plot_tbl %>% filter(progression5y != "UnkRecurrence")
+table(plot_5y_tbl$progression5y)
+```
+
+```{r}
+plot_sp5y_tbl = plot_5y_tbl %>% filter(progression5y != "SecondaryPrimary")
+table(plot_sp5y_tbl$progression5y)
+```
+
+```{r}
+n_distinct(plot_tbl$sample_name)
+n_distinct(plot_5y_tbl$sample_name)
+```
+
+```{r}
+color_scheme = c(brewer.pal(9, "Set1"), brewer.pal(8, "Accent"), brewer.pal(8, "Dark2"))
+```
+
+```{r}
+subtitle_text = glue("{nrow(samples_tbl)} Samples, {nrow(modules_tbl)} Genes")
+subtitle_text
+```
+
+adjust plot settings based on the number of modules
+
+```{r}
+num_modules = n_distinct(plot_tbl$module)
+pt_size = 0.3
+box_width = 0.3
+facet_rows = 2
+if (num_modules > 20) {
+  pt_size = 0.2
+  box_width = 0.5
+  facet_rows = 4
+}
+```
+
+plot tumor-normal
+
+```{r}
+vln_plot =
+  plot_tbl %>%
+  ggplot(aes(x = type, y = exp)) +
+  geom_violin(aes(fill = type), scale = "width", color = NA) +
+  geom_quasirandom(bandwidth = 0.8, color = "gray10", size = pt_size, alpha = 0.5) +
+  geom_boxplot(width = box_width, color = "gray20", fill = "white", outlier.colour = NA, position = position_dodge(0.9)) +
+  scale_fill_manual(values = color_scheme[c(2, 1)]) +
+  labs(
+    title = "Module Scores",
+    subtitle = subtitle_text,
+    x = "Group",
+    y = "Score"
+  ) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    # axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.background = element_blank(), strip.placement = "outside",
+    legend.title = element_blank()
+    # panel.grid.major.y = element_line(colour = "gray50", linetype = "dotted")
+  ) +
+  facet_wrap(vars(module), nrow = facet_rows, scales = "free", strip.position = "bottom")
+save_plot(glue("{out_prefix}.scores.tumor.png"), plot = vln_plot,
+          base_height = 6, base_width = 11)
+save_plot(glue("{out_prefix}.scores.tumor.pdf"), plot = vln_plot,
+          base_height = 6, base_width = 11)
+vln_plot
+```
+
+plot tumor and recurrence (4 groups)
+
+```{r}
+vln_plot =
+  plot_tbl %>%
+  ggplot(aes(x = type_progression, y = exp)) +
+  geom_violin(aes(fill = type_progression), scale = "width", color = NA) +
+  geom_quasirandom(bandwidth = 0.8, color = "gray10", size = pt_size, alpha = 0.5) +
+  geom_boxplot(width = box_width, color = "gray20", fill = "white", outlier.colour = NA, position = position_dodge(0.9)) +
+  scale_fill_manual(values = color_scheme) +
+  labs(
+    title = "Module Scores",
+    subtitle = subtitle_text,
+    x = "Group",
+    y = "Score"
+  ) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    # axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.background = element_blank(), strip.placement = "outside",
+    legend.title = element_blank()
+    # panel.grid.major.y = element_line(colour = "gray50", linetype = "dotted")
+  ) +
+  facet_wrap(vars(module), nrow = facet_rows, scales = "free", strip.position = "bottom")
+save_plot(glue("{out_prefix}.scores.type-progression.png"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+save_plot(glue("{out_prefix}.scores.type-progression.pdf"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+```
+
+plot tumor and recurrence (4 or 6 groups)
+
+```{r}
+vln_plot =
+  plot_tbl %>%
+  ggplot(aes(x = type_progression5y, y = exp)) +
+  geom_violin(aes(fill = type_progression5y), scale = "width", color = NA) +
+  geom_quasirandom(bandwidth = 0.8, color = "gray10", size = pt_size, alpha = 0.5) +
+  geom_boxplot(width = box_width, color = "gray20", fill = "white", outlier.colour = NA, position = position_dodge(0.9)) +
+  scale_fill_manual(values = color_scheme) +
+  labs(
+    title = "Module Scores",
+    subtitle = subtitle_text,
+    x = "Group",
+    y = "Score"
+  ) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    # axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.background = element_blank(), strip.placement = "outside",
+    legend.title = element_blank()
+    # panel.grid.major.y = element_line(colour = "gray50", linetype = "dotted")
+  ) +
+  facet_wrap(vars(module), nrow = facet_rows, scales = "free", strip.position = "bottom")
+save_plot(glue("{out_prefix}.scores.type-progression5y.png"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+save_plot(glue("{out_prefix}.scores.type-progression5y.pdf"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+```
+
+plot tumor and recurrence type (5-year subset)
+
+```{r}
+vln_plot =
+  plot_tbl %>%
+  ggplot(aes(x = progtype, y = exp)) +
+  geom_violin(aes(fill = progtype), scale = "width", color = NA) +
+  geom_quasirandom(bandwidth = 0.8, color = "gray10", size = pt_size, alpha = 0.5) +
+  geom_boxplot(width = box_width, color = "gray20", fill = "white", outlier.colour = NA, position = position_dodge(0.9)) +
+  scale_fill_manual(values = progtype_colors) +
+  labs(
+    title = "Module Scores",
+    subtitle = subtitle_text,
+    x = "Group",
+    y = "Score"
+  ) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    # axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.background = element_blank(), strip.placement = "outside",
+    legend.title = element_blank()
+    # panel.grid.major.y = element_line(colour = "gray50", linetype = "dotted")
+  ) +
+  facet_wrap(vars(module), nrow = facet_rows, scales = "free", strip.position = "bottom")
+save_plot(glue("{out_prefix}.scores.progtype.png"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+save_plot(glue("{out_prefix}.scores.progtype.pdf"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+```
+
+plots for 5-year subset
+
+```{r}
+type_progression_colors = progtype_colors[c(1,4,5,8)]
+names(type_progression_colors) = sort(unique(plot_5y_tbl$type_progression5y))
+type_progression_colors
+```
+
+plot tumor and recurrence (5-year subset)
+
+```{r}
+subtitle_text = glue("{n_distinct(plot_sp5y_tbl$sample_name)} Samples, {nrow(modules_tbl)} Genes")
+
+vln_plot =
+  plot_sp5y_tbl %>%
+  ggplot(aes(x = type_progression5y, y = exp)) +
+  geom_violin(aes(fill = type_progression5y), scale = "width", color = NA) +
+  geom_quasirandom(bandwidth = 0.8, color = "gray10", size = pt_size, alpha = 0.5) +
+  geom_boxplot(width = box_width, color = "gray20", fill = "white", outlier.colour = NA, position = position_dodge(0.9)) +
+  scale_fill_manual(values = type_progression_colors) +
+  labs(
+    title = "Module Scores",
+    subtitle = subtitle_text,
+    x = "Group",
+    y = "Score"
+  ) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    # axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.background = element_blank(), strip.placement = "outside",
+    legend.title = element_blank()
+    # panel.grid.major.y = element_line(colour = "gray50", linetype = "dotted")
+  ) +
+  facet_wrap(vars(module), nrow = facet_rows, scales = "free", strip.position = "bottom")
+save_plot(glue("{out_prefix}.scores.type-progression5y.png"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+save_plot(glue("{out_prefix}.scores.type-progression5y.pdf"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+```
+
+```{r}
+# subtitle_text = glue("{n_distinct(plot_5y_tbl$sample_name)} of {n_distinct(plot_tbl$sample_name)} Samples, {nrow(modules_tbl)} Genes")
+subtitle_text = glue("{n_distinct(plot_5y_tbl$sample_name)} Samples, {nrow(modules_tbl)} Genes")
+subtitle_text
+```
+
+plot tumor and recurrence type (5-year subset)
+
+```{r}
+vln_plot =
+  plot_5y_tbl %>%
+  ggplot(aes(x = progtype, y = exp)) +
+  geom_violin(aes(fill = progtype), scale = "width", color = NA) +
+  geom_quasirandom(bandwidth = 0.8, color = "gray10", size = pt_size, alpha = 0.5) +
+  geom_boxplot(width = box_width, color = "gray20", fill = "white", outlier.colour = NA, position = position_dodge(0.9)) +
+  scale_fill_manual(values = progtype_colors) +
+  labs(
+    title = "Module Scores",
+    subtitle = subtitle_text,
+    x = "Group",
+    y = "Score"
+  ) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    # axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.background = element_blank(), strip.placement = "outside",
+    legend.title = element_blank()
+    # panel.grid.major.y = element_line(colour = "gray50", linetype = "dotted")
+  ) +
+  facet_wrap(vars(module), nrow = facet_rows, scales = "free", strip.position = "bottom")
+save_plot(glue("{out_prefix}.scores.progtype.5y.png"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+save_plot(glue("{out_prefix}.scores.progtype.5y.pdf"), plot = vln_plot,
+          base_height = 6, base_width = 12)
+```
+
+calculate p-values for all combinations of subtypes
+
+```{r}
+group_combinations = combn(unique(plot_tbl$type), m = 2, simplify = TRUE)
+
+stats_tbl = tibble()
+for (module_name in rownames(scores_mat)) {
+  # scores_mat[module, ] = colMeans(scores_mat[modules_list[[module]], ])
+  for (combination_num in 1:ncol(group_combinations)) {
+    
+    group1 = group_combinations[1, combination_num] %>% as.character()
+    group2 = group_combinations[2, combination_num] %>% as.character()
+    # message(glue("comparison : {group1} vs {group2}"))
+    
+    # calculate stats
+    val_group1 = plot_tbl %>% filter(module == module_name, type == group1) %>%
+      pull(exp)
+    val_group2 = plot_tbl %>% filter(module == module_name, type == group2) %>%
+      pull(exp)
+    p_val = wilcox.test(x = val_group1, y = val_group2)$p.value
+    if (is.na(p_val)) { p_val = 1 }
+    if (p_val > 0.001) {
+      p_val = round(p_val, 3)
+    } else {
+      p_val = scales::scientific(p_val, digits = 3)
+    }
+    # message(glue("p : {p_val}"))
+    
+    stats_tbl = stats_tbl %>%
+      bind_rows(
+        c(module = module_name,
+          min_val = round(min(val_group1, val_group2), 3),
+          max_val = round(max(val_group1, val_group2), 3),
+          group1 = group1,
+          group2 = group2,
+          group1_n = length(val_group1),
+          group2_n = length(val_group2),
+          group1_median = round(median(val_group1), 3),
+          group2_median = round(median(val_group2), 3),
+          p_val = p_val)
+      )
+    
+  }
+}
+stats_tbl = stats_tbl %>%
+  mutate_at(
+    c("min_val", "max_val", "group1_n", "group2_n", "group1_median", "group2_median"),
+    as.numeric
+  )
+write_csv(stats_tbl, glue("{out_prefix}.stats.tumor.csv"))
+```
+
+```{r}
+group_combinations = combn(unique(plot_5y_tbl$progtype), m = 2, simplify = TRUE)
+
+stats_tbl = tibble()
+for (module_name in names(modules_list)) {
+  # zscore_avg_mat[module, ] = colMeans(zscore_mat[modules_list[[module]], ])
+  for (combination_num in 1:ncol(group_combinations)) {
+    
+    group1 = group_combinations[1, combination_num] %>% as.character()
+    group2 = group_combinations[2, combination_num] %>% as.character()
+    # message(glue("comparison : {group1} vs {group2}"))
+    
+    # calculate stats
+    val_group1 = plot_5y_tbl %>% filter(module == module_name, progtype == group1) %>%
+      pull(exp)
+    val_group2 = plot_5y_tbl %>% filter(module == module_name, progtype == group2) %>%
+      pull(exp)
+    p_val = wilcox.test(x = val_group1, y = val_group2)$p.value
+    if (is.na(p_val)) { p_val = 1 }
+    if (p_val > 0.001) {
+      p_val = round(p_val, 3)
+    } else {
+      p_val = scales::scientific(p_val, digits = 3)
+    }
+    # message(glue("p : {p_val}"))
+    
+    stats_tbl = stats_tbl %>%
+      bind_rows(
+        c(module = module_name,
+          group1 = group1,
+          group2 = group2,
+          group1_n = length(val_group1),
+          group2_n = length(val_group2),
+          group1_median = round(median(val_group1), 3),
+          group2_median = round(median(val_group2), 3),
+          p_val = p_val)
+      )
+    
+  }
+}
+write_csv(stats_tbl, glue("{out_prefix}.stats.progtype.5y.csv"))
+```
+
+save
+
+```{r}
+write_csv(modules_tbl, glue("{out_prefix}.genes.csv"))
+write_csv(scores_tbl, glue("{out_prefix}.scores.csv"))
+```

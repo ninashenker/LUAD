@@ -1,0 +1,412 @@
+---
+  title: "Supplementary figure 7"
+output: html_document
+---
+
+```{r include=F, message=F,echo=F,warning=F,results='hide'}
+library(readxl)
+library(pheatmap)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(tibble)
+library(ggrepel)
+library(survival)
+library(forestplot)
+library(survcomp)
+library(caret)
+library(GGally)
+library(glmnet)
+library(survcomp)
+###read in data
+subjs=read.csv('data/NYU_meta.csv',stringsAsFactors = F,check.names=F)
+##keep only stage I
+subjs=subjs[subjs$stage %in% c('IA','IB','1'),]  #150 to 145 patients
+nyu=data.frame(subjs=subjs$Study_ID,subtype=subjs$ProgType,time=as.numeric(subjs$`Time to Recurrence`),status=subjs$Progression,stringsAsFactors = F)
+sex=rep('Male',nrow(subjs))
+sex[subjs$Male_1==2]='Female'
+data=data.frame(subjs,
+                followup=as.numeric(subjs$`Time to Recurrence`),histology=subjs$Histologic_component_of_hot_spot_of_nuclear_atypia,
+                match_normal=subjs$match_normal,stringsAsFactors = F)
+data$Race[data$Race=='white']='White'
+data$Race[data$Race=='Hipanic or Latino']='Hispanic'
+data$Race[data$Race=='asian']='Asian'
+data$Race[data$Race=='Black or African America']='Black'
+data$Race=factor(data$Race,levels=c('White','Asian','Black','Hispanic'))
+
+data$LVI=factor(data$LVI,levels=c(0,1),labels=c('No','Yes'))
+
+data$Pleural_Invasion=factor(data$Pleural_Invasion,levels=c(0,1),labels=c('No','Yes'))
+
+data$Sex=factor(data$Male_1,levels=c(1,2),labels=c('Male','Female'))
+
+data$nuclear_histology=data$Histologic_component_of_hot_spot_of_nuclear_atypia
+data$nuclear_histology[data$nuclear_histology=='n.a']='Unknown'
+
+data$LepidicPerc=as.numeric(data$LepidicPerc)
+data$MicropapillaryPerc=as.numeric(data$MicropapillaryPerc)
+data$Necrosis_Perc=as.numeric(data$Necrosis_Perc)
+data$Nuclear_grade=as.numeric(data$Nuclear_grade)
+data$smoking_Pack_Years=as.numeric(data$smoking_Pack_Years)
+data$PapillaryPerc=as.numeric(data$PapillaryPerc)
+data$SolidPerc=as.numeric(data$SolidPerc)
+data$AcinarPerc=as.numeric(data$AcinarPerc)
+data$CribriformPerc=as.numeric(data$CribriformPerc)
+data$Fused_glandsPerc=as.numeric(data$Fused_glandsPerc)
+data$Cytologic_grade[data$Cytologic_grade=='n.a']=NaN
+data$Cytologic_grade=factor(data$Cytologic_grade,levels=c('Low','High'))
+data$nuclear_histology=factor(data$nuclear_histology,levels=c( 'Unknown',"Fused glands", "Micropapillary", "Solid", "Papillary", "Acinar" , "Cribriform","Lepidic"  ))
+data$IASLC_grade=data$FINAL.IASLC.GRADE.MOREIRA
+features=c('Study_ID','Progression','Time.to.Recurrence','Race','Sex','Age','smoking_Pack_Years','IASLC_grade','Size_cm','LVI','Pleural_Invasion','AcinarPerc','LepidicPerc','MicropapillaryPerc','Necrosis_Perc',
+           'PapillaryPerc','SolidPerc','CribriformPerc','Fused_glandsPerc','Nuclear_grade')
+data=data[data$match_normal,features]##only doing with matched normal
+
+clinics=data
+
+temp=read.csv(paste0('data/246samples.coding10000.modules.dim10.k20.scores.csv'),stringsAsFactors =F,check.names=F) #module scores
+
+normal=temp[,grep('-N',names(temp))]
+tumor=temp[,grep('-T',names(temp))]
+names(normal)=gsub('NYU','',names(normal))
+names(normal)=gsub('-N','',names(normal))
+names(normal)=gsub('-CH','',names(normal))
+names(normal)=gsub('S','',names(normal))
+
+names(tumor)=gsub('NYU','',names(tumor))
+names(tumor)=sapply(strsplit(names(tumor),"-"), `[`, 1)
+names(tumor)=gsub('S','',names(tumor))
+names(tumor)=gsub('A','',names(tumor))
+
+orignormal=normal
+origtumor=tumor
+
+
+###read in matched samples
+match_subjs_12=names(orignormal)[subjs$ProgType[match(names(orignormal),subjs$Study_ID)] %in% c(0,1,2)]
+normal=orignormal[,names(orignormal) %in%   match_subjs_12]
+tumor=origtumor[,names(origtumor) %in%   match_subjs_12]
+
+normal=data.frame(t(normal))
+names(normal)=paste('Module_',seq(1:20),sep='')
+tumor=data.frame(t(tumor))
+names(tumor)=paste('Module_',seq(1:20),sep='')
+origdata12=list(normal,tumor)
+
+###read in matched samples
+normal=orignormal
+tumor=origtumor
+normal=data.frame(t(normal))
+names(normal)=paste('Module_',seq(1:20),sep='')
+tumor=data.frame(t(tumor))
+names(tumor)=paste('Module_',seq(1:20),sep='')
+origdata=list(normal,tumor)
+datanames=c('Normal','Tumor')
+
+genelists=c('EGFR','TP53','KRAS','CSMD3','LRP1B','STK11')
+temp=data.frame(read_excel(paste0('data/snvs-nonsyn-vaf1-cosmic.xlsx'),1),stringsAsFactors =F,check.names=F)
+temp=temp[temp$Gene.refGene %in% genelists,]
+temp$subj=sapply(strsplit(temp$SAMPLE_T,"-"), `[`, 1)
+temp$subj=gsub('A','',temp$subj)
+temp$subj=gsub('NYU','',temp$subj)
+mutation=clinics[,1:(length(genelists)+1)]
+names(mutation)=c('Study_ID',genelists)
+mutation[,2:ncol(mutation)]='WT'
+for (i in 1:nrow(mutation)) {
+  curmut=temp[temp$subj==mutation$Study_ID[i],]
+  if (nrow(curmut)>0) {
+    for (j in 1:nrow(curmut)) {
+      mutation[i,match(curmut$Gene.refGene[j],names(mutation))]='Mut'
+    }}
+}
+for (i in 2:ncol(mutation)) {
+  mutation[,i]=factor(mutation[,i],levels=c('WT','Mut'))
+}
+mutation=mutation[match(mutation$Study_ID,clinics$Study_ID),]
+clinics=cbind.data.frame(clinics,mutation[,-1])
+
+clinics=clinics[clinics$Study_ID %in% rownames(tumor),]
+clinics=clinics[match(rownames(tumor),clinics$Study_ID),]
+
+names(clinics)[5]='Female'
+
+ii=2##tumor
+tumor=origdata[[ii]]
+tumor1=origdata12[[ii]]
+res=data.frame(matrix(NaN,10000,5))
+names(res)=c('Module','Feature','Coefficient','Pvalue','FDR')
+cnt=0
+for (i in 1:ncol(tumor)) {
+  for (j in 4:ncol(clinics)) {
+    
+    cnt=cnt+1
+    res[cnt,1]=paste0('Module_',i)
+    res[cnt,2]=paste0(names(clinics)[j])
+    if (class(clinics[,j])=='factor') 
+      cor_test=cor.test(tumor[,i],as.numeric(clinics[,j]),method='spearman')
+    else
+      cor_test=cor.test(tumor[,i],as.numeric(clinics[,j]),method='pearson')
+    res[cnt,3]=cor_test$estimate
+    res[cnt,4]=cor_test$p.value
+  }
+}
+
+####add in km pvalue
+for (i in 1:ncol(tumor)) {
+  ###add 12vs0 first
+  curdata=clinics[match(rownames(tumor1),clinics$Study_ID),c(1,2,3)]
+  curdata$module=tumor1[,i]
+  names(curdata)[3]='TTP'
+  groups=cut(rank(curdata$module),breaks=2,labels=c('Module Score Low','Module Score High'))
+  
+  surv_time=Surv(curdata$TTP,curdata$Progression)
+  sdf=survdiff(surv_time~groups)
+  p.val <- 1 - pchisq(sdf$chisq, length(sdf$n) - 1)  
+  model_formula=as.formula(paste0('Surv(TTP,Progression)~',paste('module',collapse='+')))
+  surv_fit=coxph(model_formula,curdata)
+  
+  cnt=cnt+1
+  res[cnt,1]=paste0('Module_',i)
+  res[cnt,2]='Recurrence'
+  res[cnt,3]=surv_fit$coefficients
+  res[cnt,4]=p.val
+  
+  curdata=clinics[match(rownames(tumor),clinics$Study_ID),c(1,2,3)]
+  curdata$module=tumor[,i]
+  names(curdata)[3]='TTP'
+  groups=cut(rank(curdata$module),breaks=2,labels=c('Module Score Low','Module Score High'))
+  
+  surv_time=Surv(curdata$TTP,curdata$Progression)
+  sdf=survdiff(surv_time~groups)
+  p.val <- 1 - pchisq(sdf$chisq, length(sdf$n) - 1)  
+  model_formula=as.formula(paste0('Surv(TTP,Progression)~',paste('module',collapse='+')))
+  surv_fit=coxph(model_formula,curdata)
+  
+  cnt=cnt+1
+  res[cnt,1]=paste0('Module_',i)
+  res[cnt,2]='Progression'
+  res[cnt,3]=surv_fit$coefficients
+  res[cnt,4]=p.val
+}
+
+#module 20 data
+i=20
+
+curdata=clinics[match(rownames(tumor),clinics$Study_ID),c(1,2,3)]
+curdata$module=tumor[,i]
+names(curdata)[3]='TTP'
+module20_t=curdata
+
+res=res[!is.na(res[,1]) & res[,1]!='NaN',]
+
+res[,5]=p.adjust(res[,4],method='fdr')
+res$Association='Negative'
+res$Association[res$Coefficient>0]='Positive'
+
+size_inflate=1
+res$Module=factor(res$Module,levels=paste('Module_',seq(1:20),sep=''))
+res$Feature=factor(res$Feature,levels=rev(c(names(clinics)[-c(1:3)],'Recurrence','Progression')))
+module_association_t=res
+
+###multivariate clinical data
+datatypes=c('tumor','control')
+fold=10
+ind_censor=2
+ind_time=3
+
+subjs=read.csv('data/NYU_meta.csv',header=T,stringsAsFactors = F)
+temp=read.csv(paste0('data/246samples.coding10000.modules.dim10.k20.scores.csv'),stringsAsFactors =F,check.names=F)  #module score
+
+normal=temp[,grep('-N',names(temp))]
+tumor=temp[,grep('-T',names(temp))]
+names(normal)=gsub('NYU','',names(normal))
+names(normal)=gsub('-N','',names(normal))
+names(normal)=gsub('-CH','',names(normal))
+names(normal)=gsub('S','',names(normal))
+
+names(tumor)=gsub('NYU','',names(tumor))
+names(tumor)=sapply(strsplit(names(tumor),"-"), `[`, 1)
+names(tumor)=gsub('S','',names(tumor))
+names(tumor)=gsub('A','',names(tumor))
+
+origdata=list(normal,tumor)
+datanames=c('Normal','Tumor')
+subjs=read.csv('data/NYU_meta.csv',stringsAsFactors = F,check.names=F)
+
+##keep only stage I
+subjs=subjs[subjs$stage %in% c('IA','IB','1'),]  #150 to 145 patients
+nyu=data.frame(subjs=subjs$Study_ID,subtype=subjs$ProgType,time=as.numeric(subjs$`Time to Recurrence`),status=subjs$Progression,stringsAsFactors = F)
+
+sex=rep('Male',nrow(subjs))
+sex[subjs$Male_1==2]='Female'
+data=data.frame(subjs,
+                followup=as.numeric(subjs$`Time to Recurrence`),histology=subjs$Histologic_component_of_hot_spot_of_nuclear_atypia,stringsAsFactors = F)
+
+data$Race[data$Race=='white']='White'
+data$Race[data$Race=='Hipanic or Latino']='Hispanic'
+data$Race[data$Race=='asian']='Asian'
+data$Race[data$Race=='Black or African America']='Black'
+data$Race=factor(data$Race,levels=c('White','Asian','Black','Hispanic'))
+data$LVI=factor(data$LVI,levels=c(0,1),labels=c('No','Yes'))
+data$Pleural_Invasion=factor(data$Pleural_Invasion,levels=c(0,1),labels=c('No','Yes'))
+
+data$Sex=factor(data$Male_1,levels=c(2,1),labels=c('Female','Male'))
+
+data$nuclear_histology=data$Histologic_component_of_hot_spot_of_nuclear_atypia
+data$nuclear_histology[data$nuclear_histology=='n.a']='Unknown'
+
+data$LepidicPerc=as.numeric(data$LepidicPerc)
+data$MicropapillaryPerc=as.numeric(data$MicropapillaryPerc)
+data$Necrosis_Perc=as.numeric(data$Necrosis_Perc)
+data$Nuclear_grade=as.numeric(data$Nuclear_grade)
+data$smoking_Pack_Years=as.numeric(data$smoking_Pack_Years)
+data$PapillaryPerc=as.numeric(data$PapillaryPerc)
+data$SolidPerc=as.numeric(data$SolidPerc)
+data$AcinarPerc=as.numeric(data$AcinarPerc)
+data$CribriformPerc=as.numeric(data$CribriformPerc)
+data$Fused_glandsPerc=as.numeric(data$Fused_glandsPerc)
+data$Cytologic_grade[data$Cytologic_grade=='n.a']=NaN
+data$Cytologic_grade=factor(data$Cytologic_grade,levels=c('Low','High'))
+data$IASLC_grade=data$FINAL.IASLC.GRADE.MOREIRA
+features=c('Study_ID','Progression','Time.to.Recurrence','Sex','Age','smoking_Pack_Years','IASLC_grade')
+clinics=data[,features]
+
+ind_censor=1
+ind_time=2
+ii=2
+curdata=origdata[[ii]]
+common_samples=intersect(clinics$Study_ID,names(curdata))
+temp=cbind.data.frame(clinics[match(common_samples,clinics$Study_ID),],t(curdata[20,match(common_samples,names(curdata))]))
+names(temp)[ncol(temp)]='Module_20'
+temp=temp[,-1]
+names(temp)[1:2]=c('Prog','TTP')
+features=names(temp)[-c(1:2)]
+set.seed(1)
+ind_tot=createFolds(temp[,ind_censor], k=fold, list = T)
+fold_ind=rep(0,nrow(temp))
+for (f in 1:fold) {
+  fold_ind[ind_tot[[f]]]=f
+}
+data=temp
+data$pred=NaN
+model_formula=as.formula(paste0('Surv(TTP,Prog)~',paste(features,collapse='+')))
+surv_fit=coxph(model_formula,data)
+summ_stats=summary(surv_fit)
+summ_stats=summ_stats$coefficients
+
+####forest plot
+curres=data.frame(summ_stats)
+curres=curres[,c(1,1,1,1,5)]
+names(curres)=c('var','Log_OR','CI_Low','CI_High','Pvalue')
+
+curres[,1]=rownames(curres)
+curres[,1]=gsub('High','',curres[,1])
+curres[,1]=gsub('_Pack_Years','',curres[,1])
+for (k in 1:nrow(curres)) {
+  curres[k,2]=round(summ_stats[k,1],3)
+  curres[k,3]=summ_stats[k,1]-1.96*summ_stats[k,3]
+  curres[k,4]=summ_stats[k,1]+1.96*summ_stats[k,3]
+  curres[k,5]=round(summ_stats[k,5],3)
+}
+
+row_names=list(as.list(curres[,1]))
+row_names=curres[,c(1,2,5)]
+row_names=as.matrix(rbind.data.frame(names(row_names),row_names))
+curres=rbind.data.frame(rep(NA,1,5),curres)
+multivar_hr_t=curres
+```
+
+```{r include=F, message=F,echo=F,warning=F,results='hide'}
+outpath='figure7'
+if (!dir.exists(outpath))
+  dir.create(outpath,recursive = T)
+bb <- c(0.001,0.005,0.01,0.05)
+ll <- c("0.001","0.005","0.01","0.05") 
+res=module_association_t
+size_inflate=10
+p1=ggplot(data = res, aes(x = Module, y = Feature)) +
+  geom_point(data=res,alpha=0, color='white')+
+  geom_point(data=res[res$Pvalue<0.05,],aes(size =Pvalue, color = Association)) + 
+  
+  scale_size_continuous(range = c(8,1),
+                        breaks=bb, labels=ll,limits=c(0,0.05))+
+  scale_color_manual(values=c('Negative'='blue','Positive'='red'))+
+  theme_bw()+
+  theme(
+    text = element_text(size = 26),
+    axis.text = element_text(size = 13 ),
+    legend.text = element_text(size =
+                                 15),
+    axis.text.x = element_text(angle = 45,hjust=1),
+    panel.border = element_rect(colour = "black", fill=NA, size=2))
+
+filename=paste0(outpath,'/supp_fig7a_dot_association_tumor_123vs0_2bins.png')
+
+ggsave(filename = filename,p1,device='png',width=12,height=8)
+
+###figure 5b
+curdata=module20_t
+groups=cut(rank(curdata$module),breaks=2,labels=c('Module Score Low','Module Score High'))
+
+surv_time=Surv(curdata$TTP,curdata$Progression)
+sdf=survdiff(surv_time~groups)
+p.val <- 1 - pchisq(sdf$chisq, length(sdf$n) - 1)  
+
+model_formula=as.formula(paste0('Surv(TTP,Progression)~',paste('module',collapse='+')))
+surv_fit=coxph(model_formula,curdata)
+
+###module 20 survival
+yLabels <- seq(0, 1.0, 0.1)
+filename=paste0(outpath,'/supp_fig7b_surv_module_20.png')
+
+t11=survfit(surv_time~groups)
+p1=ggsurv(survfit(surv_time~groups),CI=F,size.est=1.5) +
+  geom_ribbon(aes(ymin=low,ymax=up,fill=group),alpha=0.3)+
+  xlab('Days Disease Free')+ylab('Disease Free')+ 
+  ggtitle(paste('Tumor module 20  :',' P=', format(p.val,digits=3), ' Low/High Module score ', sum(groups=='Module Score Low'),'|',sum(groups=='Module Score High'),collapse='',sep=''))+
+  theme_classic()+ 
+  scale_y_continuous(limits=c(floor(min(t11$lower)*10)/10,1),breaks=yLabels, labels=sprintf(round(100*yLabels), fmt="%2.0f%%"))+
+  scale_color_manual(values=c('Module Score Low'='blue','Module Score High'='red'))+
+  scale_fill_manual(values=c('Module Score Low'='blue','Module Score High'='red'))+
+  theme(axis.text = element_text(size = 32),
+        axis.title = element_text(size = 25),
+        text = element_text(size = 10),
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=30),
+        panel.border = element_rect(colour = "black", fill=NA, size=2))+
+  guides(fill='none',linetype='none')
+
+ggsave(filename = filename,p1,device='png',width=12,height=8)
+
+###supp figure 7c
+curres=multivar_hr_t
+row_names=list(as.list(curres[,1]))
+row_names=curres[,c(1,2,5)]
+row_names=as.matrix(rbind.data.frame(names(row_names),row_names))
+curres=rbind.data.frame(rep(NA,1,5),curres)
+
+filename=paste0(outpath,'/supp_fig7c_multivariate_forrestplot_tumor.png')
+png(filename,width=2280,height=1480,units='px',res=200)
+own <- fpTxtGp(label = gpar(fontfamily = "Arial",cex=2.6),ticks = gpar(cex=2.5),
+               xlab  = gpar(fontfamily = 'Arial', cex = 2.8))
+forestplot(labeltext=row_names,graph.pos=3,
+           fn.ci_norm = fpDrawCircleCI,
+           curres[,c("Log_OR", "CI_Low", "CI_High")],
+           zero = 0,
+           cex  = 2.8,
+           lwd.ci=4,
+           ci.vertices=F,
+           txt_gp = own,
+           col=fpColors(box=c("red", "gold"),
+                        line=c("red", "orange"),
+                        summary=c("darkblue", "red")),
+           lineheight=unit(2,'cm'),
+           mar = unit(c(1,1,1,1), "mm"),
+           graphwidth=unit(8,"cm"),
+           boxsize=0.30,
+           confintNormalFn=c( "fpDrawCircleCI"),
+           xlab = "Log OR",
+           xticks = seq(from =-1, to = 1.5, by = 0.5),
+)
+dev.off()
+```
+

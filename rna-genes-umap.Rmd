@@ -1,0 +1,156 @@
+---
+title: "gene level dimensionality reduction"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    theme: readable
+    code_folding: none
+---
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(glue)
+  library(cowplot)
+})
+```
+
+# define inputs/outputs
+
+```{r}
+subset_label = "246samples"
+num_var_genes = 10000
+
+out_dir = glue("./out-genes-umap")
+if (!dir.exists(out_dir)) { dir.create(out_dir) }
+out_prefix = glue("{out_dir}/{subset_label}.coding{num_var_genes}")
+
+exp_csv = glue("./out-genes-exp/{subset_label}.exp.vst.coding{num_var_genes}.csv.gz")
+if (!file.exists(exp_csv)) stop()
+```
+
+# import data
+
+```{r}
+exp_tbl = read_csv(exp_csv, show_col_types = FALSE)
+dim(exp_tbl)
+```
+
+# prepare data
+
+check expression table
+
+```{r}
+exp_tbl[1:5, 1:5]
+```
+
+convert expression to matrix
+
+```{r}
+exp_mat = exp_tbl %>% as.data.frame() %>% column_to_rownames("gene") %>% as.matrix()
+exp_mat = exp_mat[, sort(colnames(exp_mat))]
+dim(exp_mat)
+```
+
+```{r}
+quantile(exp_mat)
+```
+
+convert to z-scores
+
+```{r}
+zscore_mat = t(scale(t(exp_mat)))
+dim(zscore_mat)
+```
+
+```{r}
+zscore_mat %>% quantile() %>% round(3)
+zscore_mat %>% rowMeans() %>% quantile() %>% round(3)
+```
+
+```{r}
+saveRDS(zscore_mat, glue("{out_prefix}.zscore-mat.rds"))
+```
+
+# PCA
+
+check the distribution of z-scores
+
+```{r}
+zscore_mat %>% quantile() %>% round(3)
+```
+
+```{r}
+zscore_mat %>% rowMeans() %>% quantile() %>% round(3)
+zscore_mat %>% matrixStats::rowMedians() %>% quantile() %>% round(3)
+zscore_mat %>% colMeans() %>% quantile() %>% round(3)
+zscore_mat %>% matrixStats::colMedians() %>% quantile() %>% round(3)
+```
+
+actual PCA calculation
+
+```{r}
+set.seed(99)
+pca_res = prcomp(zscore_mat, center = FALSE, scale. = FALSE)
+head(pca_res$sdev)
+pca_mat = pca_res$x
+round(pca_mat[1:5, 1:5], 3)
+```
+
+```{r}
+saveRDS(pca_mat[, 1:50], glue("{out_prefix}.pca-mat.rds"))
+```
+
+```{r}
+pca_tbl = as_tibble(pca_mat[, 1:2])
+pca_plot =
+  ggplot(pca_tbl, aes(PC1, PC2)) +
+  geom_point(color = "black", size = 0.5, alpha = 0.5) +
+  theme_cowplot() +
+  theme(plot.background = element_rect(fill = "white"), aspect.ratio = 1, axis.text = element_blank(), axis.ticks = element_blank(), legend.title = element_blank())
+save_plot(glue("{out_prefix}.pca.png"), pca_plot, base_width = 7, base_height = 6)
+pca_plot
+```
+
+factoextra scree plot
+
+```{r}
+pca_scree_plot = factoextra::fviz_eig(pca_res, ncp = 30) + theme_cowplot()
+save_plot(glue("{out_prefix}.pca-scree.png"), pca_scree_plot, base_width = 7, base_height = 5)
+pca_scree_plot
+```
+
+factoextra graph of variables
+
+```{r}
+factoextra::fviz_pca_var(pca_res)
+```
+
+# UMAP
+
+UMAP plot
+
+```{r}
+dims = 10
+num_n = 10
+min_d = 0.3
+
+set.seed(99)
+umap_mat = uwot::umap(zscore_mat, pca = dims, n_neighbors = num_n, min_dist = min_d)
+umap_mat = round(umap_mat, 5)
+colnames(umap_mat) = c("UMAP1", "UMAP2")
+umap_tbl = tibble(gene = rownames(zscore_mat), UMAP1 = umap_mat[, 1], UMAP2 = umap_mat[, 2])
+# write_csv(umap_tbl, glue("{out_prefix}.umap.dims{dims}.nn{num_n}.dist{min_d}.csv"))
+write_csv(umap_tbl, glue("{out_dir}/rna-genes-umap.csv"))
+
+umap_plot =
+  umap_tbl %>%
+  sample_frac() %>%
+  ggplot(aes(UMAP1, UMAP2)) +
+  geom_point(color = "black", size = 0.5) +
+  theme_cowplot() +
+  theme(plot.background = element_rect(fill = "white"), aspect.ratio = 1, axis.text = element_blank(), axis.ticks = element_blank(), legend.title = element_blank())
+# save_plot(glue("{out_prefix}.umap.dims{dims}.nn{num_n}.dist{min_d}.png"), umap_plot, base_width = 7, base_height = 6)
+save_plot(glue("{out_dir}/rna-genes-umap.png"), umap_plot, base_width = 7, base_height = 6)
+umap_plot
+```

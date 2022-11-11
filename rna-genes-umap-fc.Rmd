@@ -1,0 +1,219 @@
+---
+title: "generate gene fold-change UMAPs"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    theme: readable
+    code_folding: none
+---
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(glue)
+  library(ggrepel)
+  library(cowplot)
+})
+```
+
+# define inputs/outputs
+
+```{r}
+# relevant_genes = c("IL17A", "IL21", "IGLV", "FDCSP", "CD19", "CD72", "CXCL3", "CXCL9", "CXCL10", "CXCL11", "CXCL13", "CXCR4", "IL4R", "CTLA4", "IDO1", "TNFAIP3", "SOCS3", "NFKB1", "NFKBIZ", "JUN", "JUNB", "FOS", "FOSB", "STAT3")
+# relevant_genes = c("IL17A", "IL21", "IGLV", "FDCSP", "CD19", "CD72", "CXCL9", "CXCL10", "CXCL11", "CXCL13", "CXCR4", "IL4R", "CTLA4", "IDO1", "TNFAIP3", "SOCS3", "NFKB1", "NFKBIZ", "JUNB", "FOSB", "STAT3", "SPRR1B")
+relevant_genes = c("CTLA4", "JUN", "TNFAIP3", "CXCL1", "FOS", "CXCL3", "PTGS2", "SELE", "CXCL2", "ICAM1", "NFKBIA", "SOCS3", "IL6", "IRF1", "BCL3", "CCL2", "MAP3K8", "JUNB", "CSF3", "JUN", "CXCL8", "JUND", "TNFAIP3", "CXCL1", "FOS", "CXCL3", "PTGS2", "CXCL2", "FOSL1", "NFKBIA", "IL6", "CCL2", "FOSB")
+
+subset_label = "246samples"
+
+# dge_label = "T-vs-N"
+# dge_csv = glue("../DGE-DESeq2-unstr-270samples-2groups/dge.T-vs-N.csv")
+# dge_label = "N-Recurrence-vs-N-NoRecurrence5y"
+# dge_csv = glue("../DGE-DESeq2-unstr-246samples-4groups/dge.N-Recurrence-vs-N-NoRecurrence5y.csv")
+# dge_label = "T-Recurrence-vs-T-NoRecurrence5y"
+# dge_csv = glue("../DGE-DESeq2-unstr-246samples-4groups/dge.T-Recurrence-vs-T-NoRecurrence5y.csv")
+
+# dge_label = "T-vs-N"
+# plot_title = "T vs N"
+# plot_subtitle = "n = 246"
+# dge_csv = glue("../DGE-DESeq2-TvsN-246samples/dge.T-vs-N.csv")
+
+dge_label = "N-Recurrence12-vs-N-NoRecurrence5y"
+plot_title = "N Recurrence vs No Recurrence 5yr"
+plot_subtitle = "n = 182"
+dge_csv = glue("../DGE-DESeq2-12vs0-182samples/dge.N-Recurrence12-vs-N-NoRecurrence5y.csv")
+
+if (!file.exists(dge_csv)) stop()
+
+num_var_genes = 10000
+pca_dims = 10
+num_n = 10
+min_d = 0.3
+
+dr_prefix = glue("./out-genes-umap/{subset_label}.coding{num_var_genes}")
+umap_label = glue("dims{pca_dims}.nn{num_n}.dist{min_d}")
+umap_csv = glue("{dr_prefix}.umap.{umap_label}.csv")
+if (!file.exists(umap_csv)) stop()
+
+out_dir = glue("./out-genes-umap-fc")
+if (!dir.exists(out_dir)) { dir.create(out_dir) }
+out_prefix = glue("{out_dir}/{subset_label}.coding{num_var_genes}.umap.{umap_label}.{dge_label}")
+```
+
+# import data
+
+```{r}
+dge_tbl = read_csv(dge_csv, show_col_types = FALSE)
+dim(dge_tbl)
+```
+
+```{r}
+umap_tbl = read_csv(umap_csv, show_col_types = FALSE)
+dim(umap_tbl)
+```
+
+# fold change plot
+
+```{r}
+plot_tbl = inner_join(umap_tbl, dge_tbl, by = "gene")
+dim(plot_tbl)
+```
+
+```{r}
+head(plot_tbl)
+```
+
+```{r}
+plot_tbl$log2FoldChange %>% quantile(seq(0, 1, 0.1)) %>% round(2)
+```
+
+```{r}
+fc_cutoff = plot_tbl$log2FoldChange %>% abs() %>% quantile(0.99)
+plot_tbl =
+  plot_tbl %>%
+  mutate(
+    log2FC = log2FoldChange,
+    log2FC = if_else(log2FC > fc_cutoff, fc_cutoff, log2FC),
+    log2FC = if_else(log2FC < -fc_cutoff, -fc_cutoff, log2FC)
+  )
+plot_tbl$log2FC %>% quantile(seq(0, 1, 0.1)) %>% round(2)
+```
+
+UMAP plot with modules
+
+```{r}
+set.seed(99)
+plot_tbl = plot_tbl %>% sample_frac()
+```
+
+```{r message=FALSE, warning=FALSE}
+umap_plot =
+  ggplot(plot_tbl, aes(UMAP1, UMAP2)) +
+  geom_point(aes(color = log2FC), size = 0.5) +
+  labs(title = plot_title, subtitle = plot_subtitle) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    aspect.ratio = 1,
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  scale_color_gradient2(low = "#053061", mid = "#FFFFFF", high = "#E41A1C")
+save_plot(glue("{out_prefix}.png"), umap_plot, base_width = 8, base_height = 6)
+save_plot(glue("{out_prefix}.pdf"), umap_plot, base_width = 8, base_height = 6)
+umap_plot
+```
+
+# fold change plot with gene labels
+
+check for missing genes
+
+```{r}
+setdiff(relevant_genes, plot_tbl$gene)
+```
+
+```{r}
+length(relevant_genes)
+relevant_genes = intersect(relevant_genes, plot_tbl$gene)
+length(relevant_genes)
+```
+
+```{r}
+plot_tbl %>% filter(gene %in% relevant_genes)
+```
+
+UMAP plot with selected genes
+
+```{r}
+# default is 0.25
+text_pad = 0.1
+if (length(relevant_genes) < 30) { text_pad = 0.2 }
+if (length(relevant_genes) < 20) { text_pad = 0.5 }
+```
+
+```{r}
+set.seed(99)
+plot_tbl =
+  plot_tbl %>%
+  mutate(gene_label = if_else(gene %in% relevant_genes, gene, "")) %>%
+  arrange(gene_label)
+umap_plot =
+  ggplot(plot_tbl, aes(x = UMAP1, y = UMAP2, label = gene_label)) +
+  # geom_point(aes(color = log2FC), size = ifelse(plot_tbl$gene_label == "", 0.5, 2)) +
+  geom_point(aes(color = log2FC), size = 0.5) +
+  geom_text_repel(color = "black", segment.color = "gray20", box.padding = text_pad, max.overlaps = Inf) +
+  labs(title = plot_title, subtitle = plot_subtitle) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    aspect.ratio = 1,
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  scale_color_gradient2(low = "#053061", mid = "#FFFFFF", high = "#E41A1C")
+save_plot(glue("{out_prefix}.genes.png"), umap_plot, base_width = 8, base_height = 6)
+save_plot(glue("{out_prefix}.genes.pdf"), umap_plot, base_width = 8, base_height = 6)
+umap_plot
+```
+
+UMAP plot with selected genes (significant only)
+
+```{r}
+plot_tbl %>% nrow()
+plot_tbl %>% filter(padj < 0.05) %>% nrow()
+```
+
+```{r}
+sig_genes = plot_tbl %>% filter(padj < 0.05, gene %in% relevant_genes) %>% pull(gene)
+length(sig_genes)
+```
+
+```{r}
+set.seed(99)
+plot_tbl =
+  plot_tbl %>%
+  mutate(gene_label = if_else(gene %in% sig_genes, gene, "")) %>%
+  arrange(gene_label)
+umap_plot =
+  ggplot(plot_tbl, aes(x = UMAP1, y = UMAP2, label = gene_label)) +
+  # geom_point(aes(color = log2FC), size = ifelse(plot_tbl$gene_label == "", 0.5, 2)) +
+  geom_point(aes(color = log2FC), size = 0.5) +
+  geom_text_repel(color = "black", segment.color = "gray20", box.padding = 0.7, max.overlaps = Inf) +
+  labs(title = plot_title, subtitle = plot_subtitle) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    aspect.ratio = 1,
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  scale_color_gradient2(low = "#053061", mid = "#FFFFFF", high = "#E41A1C")
+save_plot(glue("{out_prefix}.genes.padj005.png"), umap_plot, base_width = 8, base_height = 6)
+save_plot(glue("{out_prefix}.genes.padj005.pdf"), umap_plot, base_width = 8, base_height = 6)
+umap_plot
+```

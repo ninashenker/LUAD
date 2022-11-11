@@ -1,0 +1,156 @@
+---
+title: "generate gene modules"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    theme: readable
+    code_folding: none
+---
+
+```{r packages}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(glue)
+  library(cowplot)
+  library(RColorBrewer)
+  library(ggbeeswarm)
+})
+```
+
+# define inputs/outputs
+
+```{r}
+subset_label = "246samples"
+
+num_var_genes = 10000
+pca_dims = 10
+num_n = 10
+min_d = 0.3
+
+n_clust = 20
+# n_clust = 50
+
+out_dir = glue("./out-modules-generate")
+if (!dir.exists(out_dir)) { dir.create(out_dir) }
+out_prefix = glue("{out_dir}/{subset_label}.coding{num_var_genes}.modules.dim{pca_dims}.k{n_clust}")
+
+dr_prefix = glue("./out-genes-umap/{subset_label}.coding{num_var_genes}")
+zscore_rds = glue("{dr_prefix}.zscore-mat.rds")
+if (!file.exists(zscore_rds)) stop()
+pca_rds = glue("{dr_prefix}.pca-mat.rds")
+if (!file.exists(pca_rds)) stop()
+```
+
+# import data
+
+```{r}
+zscore_mat = readRDS(zscore_rds)
+dim(zscore_mat)
+```
+
+```{r}
+pca_mat = readRDS(pca_rds)
+dim(pca_mat)
+```
+
+```{r}
+zscore_mat %>% quantile() %>% round(3)
+zscore_mat %>% rowMeans() %>% quantile() %>% round(3)
+```
+
+# PAM clustering
+
+```{r}
+dim(pca_mat)
+```
+
+```{r}
+pca_mat = pca_mat[, 1:pca_dims]
+dim(pca_mat)
+```
+
+```{r}
+pam_res = cluster::pam(pca_mat, k = n_clust, cluster.only = TRUE, pamonce = 5)
+```
+
+```{r}
+str(pam_res)
+```
+
+generate a table of clusters
+
+```{r}
+modules_tbl = enframe(pam_res, name = "gene", value = "module")
+modules_tbl$module = str_pad(modules_tbl$module, width = 2, side = "left", pad = "0")
+modules_tbl
+```
+
+```{r}
+modules_tbl %>% count(module, sort = TRUE)
+```
+
+save table
+
+```{r}
+# write_csv(modules_tbl, glue("{out_prefix}.genes.csv"))
+write_csv(modules_tbl, "data/rna-genes-modules.csv")
+```
+
+UMAP plot with modules
+
+```{r message=FALSE, warning=FALSE}
+# umap_tbl = read_csv(glue("{dr_prefix}.umap.dims{pca_dims}.nn{num_n}.dist{min_d}.csv"))
+umap_tbl = read_csv("data/rna-genes-umap.csv")
+umap_tbl = inner_join(umap_tbl, modules_tbl, by = "gene")
+
+color_scheme = c(brewer.pal(9, "Set1"), brewer.pal(8, "Accent"), brewer.pal(8, "Dark2"))
+if (n_distinct(umap_tbl$module) > 25) {
+  color_scheme = c(ggsci::pal_igv("default")(51), ggsci::pal_ucscgb()(26))
+}
+
+umap_plot =
+  umap_tbl %>%
+  sample_frac() %>%
+  ggplot(aes(UMAP1, UMAP2)) +
+  geom_point(aes(color = module), size = 0.5) +
+  theme_cowplot() +
+  theme(plot.background = element_rect(fill = "white"), aspect.ratio = 1, axis.text = element_blank(), axis.ticks = element_blank(), legend.title = element_blank()) +
+  guides(color = guide_legend(override.aes = list(size = 5))) +
+  scale_color_manual(values = color_scheme)
+save_plot(glue("{out_prefix}.umap.nn{num_n}.dist{min_d}.png"), umap_plot, base_width = 8, base_height = 6)
+umap_plot
+```
+
+# average expression per module
+
+```{r}
+modules_list = split(x = modules_tbl$gene, f = modules_tbl$module)
+str(modules_list)
+```
+
+```{r}
+zscore_avg_mat = matrix(nrow = length(modules_list), ncol = ncol(zscore_mat))
+rownames(zscore_avg_mat) = names(modules_list)
+colnames(zscore_avg_mat) = colnames(zscore_mat)
+zscore_avg_mat[, 1:5]
+```
+
+```{r}
+for (module in names(modules_list)) {
+  zscore_avg_mat[module, ] = colMeans(zscore_mat[modules_list[[module]], ])
+}
+```
+
+convert to a tibble
+
+```{r}
+zscore_avg_tbl = zscore_avg_mat %>% round(5) %>% as_tibble(rownames = "module")
+zscore_avg_tbl
+```
+
+save table
+
+```{r}
+# write_csv(zscore_avg_tbl, glue("{out_prefix}.scores.csv"))
+write_csv(zscore_avg_tbl, "data/rna-modules-scores-n246.csv")
+```
