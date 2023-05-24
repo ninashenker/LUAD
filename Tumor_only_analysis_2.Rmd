@@ -1,0 +1,517 @@
+---
+title: "Tumor_only_scRNA_analysis"
+output: html_document
+date: "2022-09-08"
+---
+
+### scRNA Analysis
+
+```{r}
+suppressPackageStartupMessages({
+library(Seurat)
+library(tidyverse)
+library(RColorBrewer)
+library(Seurat)
+library(data.table)
+library(scico)
+library(ggplot2)
+library(stringr)
+library(glue)
+library(cowplot)
+library(ggbeeswarm)
+library(scales)
+library(ggpubr)
+library(dplyr)
+})
+```
+
+### Define all input
+
+```{r}
+# Previous steps on cluster: selecting normal/tumor tissue, filtering out contaminated samples, QC measurements (removing mitochondrial perc, sample integration, doublets)
+
+# Seurat object containing the samples you wish
+so <- readRDS('t18-singlets-dim30-infercnv.rds')
+
+# Output from BayesPrism: unnormalized score for genes
+counts_mat = read.csv('bayesprism_output/all_unnormalized_FINAL.csv')
+```
+
+```{r}
+# Name the directory you wish for your output to be located in
+out_dir = glue("t18-singlets-dim30/")
+if (!dir.exists(out_dir)) { dir.create(out_dir) }
+```
+
+### Begin plotting for LUAD manuscript
+
+```{r}
+# Supp Fig 10a
+
+# Set idents to patients
+Idents(so) = "orig.ident"
+
+# Set custom colors
+plot = DimPlot(so, reduction = "umap", shuffle = TRUE, raster = FALSE, pt.size = 0.01, cols = c("#84C4F8FF", "#309DF4FF", "#1A7AD6FF", "#0C46A0FF", "#EA8E8EFF", "#F34940FF", "#D73130FF", "#B71B1BFF", "limegreen", "hotpink", "mediumorchid", "plum", "slateblue1", "slategray", "orange", "darkgreen", "skyblue", "purple")) + labs(title = 'Tumor per Patient') + theme(aspect.ratio = 1, plot.title = element_text(hjust = 0.5), axis.ticks = element_blank(), axis.text = element_blank())
+
+# Save plot
+save_plot(glue("{out_dir}/t18-tumor_per_patient.png"), plot = plot, base_height = 6.5, base_width = 8)
+Sys.sleep(1)
+```
+
+```{r}
+plot
+```
+
+```{r}
+# Main Fig 7a
+
+# Set idents to main type labels
+Idents(so) = "label_kim2020types"
+order = c("Stroma", "Endothelial-cells", "Epithelial-cells", "Myeloid-cells", "T-NK-cells", "B-lymphocytes", "MAST-cells")
+order = rev(order)
+plot_types = DimPlot(so, reduction = "umap", shuffle = TRUE, raster = FALSE, pt.size = 0.01, cols = c("limegreen", "#B71B1BFF", "#0C46A0FF", "hotpink", "mediumorchid", "lightblue", "orange"), order = order) +
+labs(title = 'Cell Types') + theme(aspect.ratio = 1, plot.title = element_text(hjust = 0.5), 
+axis.ticks = element_blank(), axis.text = element_blank()) +  guides(color = guide_legend(override.aes = list(size=4), ncol=1))
+
+# Save plot
+save_plot(glue("{out_dir}/t18-kim2020types.png"), plot = plot_types, base_height = 6.5, base_width = 8)
+Sys.sleep(1)
+```
+
+```{r}
+plot_types
+```
+
+```{r}
+
+# Main Fig 7b
+
+# Ident to subtype labels
+Idents(so) = "label_kim2020subtypes"
+
+
+#Set custom colors and corresponding order
+color = c('darkgreen', 'green', 'limegreen', 'lightgreen', "#EA8E8EFF", "#F34940FF", "#D73130FF", 'pink3', 'violet', 'hotpink', 'plum1', 'lightcoral', 'purple', 'orchid', 'yellow', 'orange', 'royalblue', 'skyblue', 'turquoise', 'navy', 'slateblue', 'plum4', 'purple4', 'magenta4')
+order = c("Malignant-cells", "tS2", "tS1", "Ciliated", "Club", "AT2", "AT1", "MAST", "B-lymphocytes", "NK", "T-lymphocytes", "Monocytes", "CD207CD1a-LCs", "CD1c-DCs", "Alveolar-Mac", "Activated-DCs", "Tip-like-ECs", "Stalk-like-ECs", "Lymphatic-ECs", "Pericytes", "Myofibroblasts", "COL14A1-matrix-FBs", "COL13A1-matrix-FBs")
+
+# Plot with custom colors and order 
+plot_subtypes = DimPlot(so, reduction = "umap", shuffle = TRUE, raster = FALSE, pt.size = 0.01, cols=color, order=order) + labs(title = 'Cell Subtypes') + theme(aspect.ratio = 1, plot.title = element_text(hjust = 0.5), axis.ticks = element_blank(), axis.text = element_blank()) +  guides(color = guide_legend(override.aes = list(size=4), ncol=1))
+
+# Save plot
+save_plot(glue("{out_dir}/t18-kim2020subtypes.png"), plot = plot_subtypes, base_height = 6.5, base_width = 8)
+Sys.sleep(1)
+```
+
+```{r}
+plot_subtypes
+```
+
+### Calculating the per cell module 20 score
+
+```{r}
+# Main Fig 7c
+DefaultAssay(so) <- "RNA"
+so
+```
+
+```{r}
+# Read in list of all genes that belong to module 20
+modules_tbl = read_csv('modules.csv', show_col_types = FALSE)
+module_20 = modules_tbl[modules_tbl$module == '20', ]
+module_20
+```
+
+```{r}
+# Extract all the genes
+genes = list(module_20 = module_20$gene)
+```
+
+```{r}
+# Add in module score for each gene (note: some may be missing)
+so <- AddModuleScore(so, features = genes, name="Module20_")
+names(so@meta.data)[ncol(so@meta.data)] <- "Module20_score"
+```
+
+```{r}
+# Check the values of the min or max to set the scale
+min(so@meta.data$Module20_score)
+max(so@meta.data$Module20_score)
+```
+
+```{r}
+# Main Fig 7c
+plot<- 
+  FeaturePlot(so, features = "Module20_score", reduction = "umap", label = FALSE, repel = TRUE) +
+scale_colour_gradient2(
+  low = "blue",
+  mid = "lightgray",
+  high = "red",
+  midpoint = 0,
+  space = "Lab",
+  guide = "colourbar",
+  aesthetics = "colour",
+  limits = c(-0.25,1.0),
+  breaks = c(0.0, 0.5,1.0)
+) +
+  labs(
+    title = "Per cell module 20 score",
+  ) +  
+  theme(
+    aspect.ratio = 1, 
+    plot.title = element_text(hjust = 0.5),
+    axis.ticks = element_blank(), 
+    axis.text = element_blank()
+    ) 
+ggsave(glue('{out_dir}/module_20_umap_tumor.png'), height=6.5, width=8)
+```
+
+```{r}
+plot
+```
+
+### scRNA data percentage of Kim 2020 subtypes
+
+```{r}
+# Supp Fig 10b
+data <- as.data.frame(as.matrix(so@meta.data))
+df <- data %>% 
+  group_by(label_kim2020subtypes_infercnv) %>%
+  summarise(percent=100*n()/nrow(data))
+write.table(df , file = glue("{out_dir}/cell_percentages.csv"))
+```
+
+```{r}
+# Make one single bar rather than a bar per cell type
+df <- df %>% 
+  mutate(Types = "Cell_types")
+
+# Stacked + percent
+ggplot(df, aes(x=Types, y = percent, fill= label_kim2020subtypes_infercnv)) + 
+  geom_col() +
+  theme_minimal(base_size = 16) +
+  ylab("Percentage") +
+  xlab(NULL)+
+  scale_fill_manual(values=c('pink3', 'violet', 'royalblue', 'skyblue', 'lightblue', 'hotpink', 'plum1', 'navy', 'turquoise', 'darkgreen', 'green', '#EA8E8EFF', 'orange', 'lightcoral', 'limegreen', 'orchid', 'lightgreen', '#F34940FF','purple', '#D73130FF', 'slateblue'))
+ggsave(glue('{out_dir}/cell_perc_barplot.png'), height=20, width=8)
+```
+
+### Module 20 score per cell type plots
+
+```{r}
+# Change into plot_tbl
+df <- so@meta.data
+plot_tbl <- as.data.table(df, TRUE)
+head(plot_tbl)
+```
+
+```{r}
+# Supp Fig 10c
+subtitle_text = glue("{nrow(plot_tbl)} Cells")
+pt_size=0.1
+box_width = 0.3
+
+# Plot violin plot and order high to low
+vln_plot =
+  plot_tbl %>%
+  ggplot(aes(x=reorder(label_kim2020subtypes_infercnv,-Module20_score,FUN=median), y = Module20_score)) +
+  geom_violin(aes(fill = label_kim2020subtypes_infercnv), scale = "width", color = NA) +
+  #geom_quasirandom(bandwidth = 0.8, color = "gray10", size = pt_size, alpha = 0.9) +
+  geom_boxplot(width = box_width, color = "gray20", fill = "white", outlier.colour = NA, position = position_dodge(0.9)) +
+  geom_hline(yintercept=0, linetype="dashed")+
+  scale_fill_manual(values=c('pink3', 'violet', 'royalblue', 'skyblue', 'lightblue', 'hotpink', 'plum1', 'navy', 'turquoise', 'darkgreen', 'green', '#EA8E8EFF', 'orange', 'lightcoral', 'limegreen', 'orchid', 'lightgreen', '#F34940FF','purple', '#D73130FF', 'slateblue'))+
+  labs(
+    title = "Module 20 Score per Cell",
+    subtitle = subtitle_text,
+    x = "Cell-types",
+    y = "Score"
+  ) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle=90, size=12),
+    strip.background = element_blank(), strip.placement = "outside",
+    legend.position="none"
+  ) 
+
+#Save plot
+save_plot(glue("{out_dir}/module20_per_cell.png"), plot = vln_plot,
+          base_height = 6, base_width = 11)
+```
+
+```{r}
+vln_plot
+```
+
+### Percentage with positive module 20 score per cell type plots
+
+```{r}
+# Create empty data frame
+data_frame = data.frame(col1 = character(), col2 = numeric())
+data_frame
+```
+
+```{r}
+# Define the cell types you are interested in
+cell_types <- c("Tumor", "Ciliated", "Club", "AT2", "AT1", "MAST", "B-lymphocytes", "NK", "T-lymphocytes", "Monocytes", "CD207CD1a-LCs", "CD1c-DCs", "Alveolar-Mac", "Activated-DCs", "Tip-like-ECs", "Stalk-like-ECs", "Lymphatic-ECs", "Pericytes", "Myofibroblasts", "COL14A1-matrix-FBs", "COL13A1-matrix-FBs")
+
+```
+
+```{r}
+# Create empty list 
+percent <- NULL
+# Iterate through desired cell-types 
+for (x in cell_types) {
+subset <- subset(df, label_kim2020subtypes_infercnv == x)
+#print(subset)
+pos = sum(subset$Module20_score > 0)
+neg = sum(subset$Module20_score < 0)
+perc = pos/(pos+neg)*100
+percent <- append(percent, perc)
+}
+```
+
+```{r}
+data_frame = data.frame(cell_types, percent)
+data_frame
+```
+
+```{r}
+plot_df <- as.data.table(data_frame, FALSE)
+plot_df
+```
+
+```{r}
+# Main Fig 7d
+# Plot a bar per cell_type and organize to be the highest to lowest percentage
+plot = ggplot(plot_df, aes(x=reorder(cell_types, percent), y = percent, fill=cell_types)) +   geom_bar(stat = "identity") + coord_flip()+ 
+  scale_fill_manual(values = c('pink3', 'violet', 'royalblue', 'skyblue', 'lightblue', 'hotpink', 'plum1', 'navy', 'turquoise', 'darkgreen', 'green', '#EA8E8EFF', 'orange', 'lightcoral', 'limegreen', 'orchid', 'lightgreen', '#F34940FF','purple', '#D73130FF', 'slateblue')) +
+  labs(
+    title = "Percentage of cells with Positive Module 20 Score",
+    x = "Cell-types",
+    y = "Percentage"
+  ) +
+  theme_cowplot() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    axis.text.x = element_text(size=12),
+    strip.background = element_blank(), strip.placement = "outside",
+    legend.position="none"
+
+  ) 
+#+geom_text(aes(label = signif(percent)), nudge_y = 10)
+
+
+save_plot(glue("{out_dir}/positive_mod20_barplot.png"), plot = plot,
+          base_height = 6, base_width = 11)
+```
+
+```{r}
+plot
+```
+
+### Calculating zscore across all celltypes
+
+```{r}
+counts_mat = counts_mat %>% column_to_rownames("gene") %>% as.matrix()
+counts_mat = counts_mat[, sort(colnames(counts_mat))]
+dim(counts_mat)
+```
+
+```{r}
+# Transpose matrix
+t_counts_mat <- round(t(counts_mat))
+t_counts_mat[1:5, 1:5]
+```
+
+```{r}
+# Add pseudocount to fix zero values for certain genes
+pseudocount_mat = t_counts_mat + 1
+pseudocount_mat[1:5, 1:5]
+```
+
+```{r}
+coldata = data.frame(sample_name = colnames(t_counts_mat))
+rownames(coldata) = coldata$sample_name
+```
+
+```{r}
+dds = DESeqDataSetFromMatrix(pseudocount_mat, coldata, ~1)
+```
+
+```{r}
+# apply a variance stabilizing transformation (VST) to the count data
+vsd = varianceStabilizingTransformation(dds, blind = TRUE, fitType = "local")
+vst_mat = assay(vsd)
+
+# save
+saveRDS(vst_mat, file=glue("{out_dir}/bp_zscore.rds"))
+write.csv(vst_mat, glue("{out_dir}/bp_zscore.csv"))
+```
+
+```{r}
+exp_tbl = read_csv(glue("{out_dir}/bp_zscore.csv"), col_types = cols())
+dim(exp_tbl)
+```
+
+```{r}
+exp_tbl[1:5, 1:5]
+```
+
+```{r}
+exp_mat =exp_tbl %>% as.data.frame()
+colnames(exp_mat)[1]<- "gene"
+exp_mat =exp_mat%>% column_to_rownames("gene") %>% as.matrix()
+exp_mat = exp_mat[, sort(colnames(exp_mat))]
+dim(exp_mat)
+```
+
+```{r}
+quantile(exp_mat)
+```
+
+```{r}
+zscore_mat = t(scale(t(exp_mat)))
+dim(zscore_mat)
+```
+
+```{r}
+zscore_mat[1:5,1:5]
+```
+
+```{r}
+zscore_mat %>% quantile() %>% round(3)
+```
+
+```{r}
+zscore_mat %>% rowMeans() %>% quantile() %>% round(3)
+```
+
+```{r}
+write.csv(zscore_mat, glue("{out_dir}/zscore_all.csv"))
+```
+
+### Composition of noRecurrence vs Recurrence boxplots
+
+```{r}
+column_names = c('Activated-DCs', 'Alveolar-Mac', 'CD1c-DCs', 'CD207CD1a-LCs', 'COL13A1-matrix-FBs', 'COL14A1-matrix-FBs', 'T-lymphocytes', 'B-lymphocytes', 'Lymphatic-ECs', 'MAST', 'Monocytes', 'Myofibroblasts', 'NK','Pericytes', 'Stalk-like-ECs', 'Tip-like-ECs', 'AT1', 'AT2', 'Ciliated', 'Club', 'Mesothelial-cells')
+
+cell_type='CD1c-DCs'
+out_dir = 'NYU_tumor'
+df <- read.csv(glue('{out_dir}/{cell_type}.csv'))
+df[df == "NoRecurrence"] <- "NoProgression"
+df
+```
+
+```{r}
+compare_means(score ~ progression, data = df)
+```
+
+```{r}
+library(dplyr)
+x <- df %>% dplyr::count(progression)
+groups = x[[1]]
+labels = x[[2]]
+print(groups)
+print(labels)
+
+```
+
+```{r}
+df$progression <- factor(df$progression , levels=c("NoProgression", "SecondaryPrimary", "Recurrence"))
+my_comparisons <- list( c("NoProgression", "SecondaryPrimary"), c("SecondaryPrimary", "Recurrence"), c("NoProgression", "Recurrence") )
+boxplot<- ggboxplot(df, x = "progression", y = "score",
+          color = "progression", add = "jitter", palette=c('royalblue', 'limegreen', '#F34940FF'), legend='NONE', xlab = '', ylab='Module 20 Score')+ 
+  stat_compare_means(comparisons = my_comparisons, size=5)+ # Add pairwise comparisons p-value
+  stat_compare_means(label.y = 1, size=5) +
+  ggtitle(glue("{cell_type}")) + theme(plot.title = element_text(hjust = 0.5, size=15))+  
+  scale_x_discrete(labels=c(glue('NoProgression \n n={labels[1]}'), glue('SecondaryPrimary \n n={labels[3]}'), glue('Recurrence \n n={labels[2]}')))
+```
+
+```{r}
+save_plot(glue("t18-singlets-dim30/{cell_type}_main_7e.png"), plot = boxplot, base_height = 6, base_width = 6)
+```
+
+```{r}
+boxplot
+```
+
+```{r}
+comp_df <- read.csv('NYU_tumor/composition_barplot.csv')
+comp_df[comp_df == "NoRecurrence"] <- "NoProgression"
+comp_df
+```
+
+```{r}
+column_names = c('Activated.DCs', 'Alveolar.Mac', 'CD1c.DCs', 'CD207CD1a.LCs', 'COL13A1.matrix.FBs', 'COL14A1.matrix.FBs', 'T.lymphocytes', 'B.lymphocytes', 'Lymphatic.ECs', 'MAST', 'Monocytes', 'Myofibroblasts', 'NK','Pericytes', 'Stalk.like.ECs', 'Tip.like.ECs', 'AT1', 'AT2', 'Ciliated', 'Club', 'Tumor')
+for (cell_type in column_names) {
+
+comp_df$Progression <- factor(comp_df$Progression , levels=c("NoProgression", "SecondaryPrimary", "Recurrence"))
+
+my_comparisons <- list( c("NoProgression", "SecondaryPrimary"), c("SecondaryPrimary", "Recurrence"), c("NoProgression", "Recurrence") )
+
+boxplot<- ggboxplot(comp_df, x = "Progression", y = cell_type,
+          color = "Progression", add = "jitter", palette=c('royalblue', 'limegreen', '#F34940FF'), legend='NONE', xlab = '', ylab='Composition', width = 0.4)+ 
+  ggtitle(glue("{cell_type}")) + theme(plot.title = element_text(hjust = 0.5, size=15))+    
+  stat_compare_means(comparisons = my_comparisons, size=5)+
+  scale_x_discrete(labels=c(glue('NoProgression \n n={labels[1]}'), glue('SecondaryPrimary \n n={labels[2]}'), glue('Recurrence \n n={labels[3]}')))
+
+save_plot(glue("NYU_tumor/{cell_type}_composition.png"), plot = boxplot, base_height = 6, base_width = 6)
+}
+```
+
+### Calculate composition for TME
+
+```{r}
+comp_df$sum <- comp_df$AT2 + comp_df$Pericytes + comp_df$Alveolar.Mac + comp_df$B.lymphocytes + comp_df$CD1c.DCs + comp_df$Club + comp_df$Tip.like.ECs + comp_df$Stalk.like.ECs + comp_df$Myofibroblasts + comp_df$Monocytes + comp_df$COL14A1.matrix.FBs + comp_df$COL13A1.matrix.FBs + comp_df$Lymphatic.ECs + comp_df$AT1 + comp_df$T.lymphocytes + comp_df$Ciliated + comp_df$NK + comp_df$Activated.DCs + comp_df$MAST
+
+comp_df
+```
+
+```{r}
+comp_df2 <- comp_df %>%
+   mutate_at(vars(AT2:MAST) , funs(TME = ./comp_df$sum))
+comp_df2
+```
+
+```{r}
+x <- comp_df2 %>% dplyr::count(Progression)
+groups = x[[1]]
+labels = x[[2]]
+print(groups)
+print(labels)
+
+```
+
+```{r}
+column_names = c('Activated.DCs_TME', 'Alveolar.Mac_TME', 'CD1c.DCs_TME', 'CD207CD1a.LCs_TME', 'COL13A1.matrix.FBs_TME', 'COL14A1.matrix.FBs_TME', 'T.lymphocytes_TME', 'B.lymphocytes_TME', 'Lymphatic.ECs_TME', 'MAST_TME', 'Monocytes_TME', 'Myofibroblasts_TME', 'NK_TME','Pericytes_TME', 'Stalk.like.ECs_TME', 'Tip.like.ECs_TME', 'AT1_TME', 'AT2_TME', 'Ciliated_TME', 'Club_TME')
+
+for (cell_type in column_names) {
+
+comp_df2$Progression <- factor(comp_df2$Progression , levels=c("NoProgression", "SecondaryPrimary", "Recurrence"))
+
+my_comparisons <- list( c("NoProgression", "SecondaryPrimary"), c("SecondaryPrimary", "Recurrence"), c("NoProgression", "Recurrence") )
+
+boxplot<- ggboxplot(comp_df2, x = "Progression", y = cell_type,
+          color = "Progression", add = "jitter", palette=c('royalblue', 'limegreen', '#F34940FF'), legend='NONE', xlab = '', ylab='Composition', width = 0.4)+ 
+  ggtitle(glue("{cell_type}")) + theme(plot.title = element_text(hjust = 0.5, size=15))+ 
+  stat_compare_means(comparisons = my_comparisons, size=5)+ 
+  scale_x_discrete(labels=c(glue('NoProgression \n n={labels[1]}'), glue('SecondaryPrimary \n n={labels[2]}'), glue('Recurrence \n n={labels[3]}')))
+
+save_plot(glue("NYU_tumor/{cell_type}_composition.png"), plot = boxplot, base_height = 6, base_width = 6)
+}
+```
+
+```{r}
+boxplot
+```
+
+### Session info
+
+```{r}
+sessionInfo()
+```
