@@ -31,16 +31,22 @@ library(ggpubr)
 # Previous steps on cluster: selecting normal/tumor tissue, filtering out contaminated samples, QC measurements (removing mitochondrial perc, sample integration, doublets)
 
 # Seurat object containing the samples you wish
-so <- readRDS('n15-singlet-bc-og-labels.rds')
+so <- readRDS('TAN-singlet-dim30-nn30-res0.8-harmony.rds')
 
-# Output from BayesPrism: unnormalized score for genes
-counts_mat = read.csv('bayesprism_output/all_unnormalized_FINAL.csv')
 ```
 
 ```{r}
 # Name the directory you wish for your output to be located in
-out_dir = glue("normal_og_labels-n15-singlets-batch-adj-cca-dim10/")
+out_dir = glue("Harmony_TAN/")
 if (!dir.exists(out_dir)) { dir.create(out_dir) }
+```
+
+### Set assay to RNA
+
+```{r}
+DefaultAssay(object = so)
+DefaultAssay(object = so) <- "RNA"
+DefaultAssay(object = so)
 ```
 
 ### Begin plotting for LUAD manuscript
@@ -53,6 +59,53 @@ Idents(so) = "orig.ident"
 
 # Set custom colors
 plot = DimPlot(so, reduction = "umap", shuffle = TRUE, raster = FALSE, pt.size = 0.01, cols = c("#84C4F8FF", "#309DF4FF", "#1A7AD6FF", "#0C46A0FF", "#EA8E8EFF", "#F34940FF", "#D73130FF", "#B71B1BFF", "limegreen", "hotpink", "mediumorchid", "plum", "slateblue1", "slategray", "orange")) + labs(title = 'Adjacent Normal per Patient') + theme(aspect.ratio = 1, plot.title = element_text(hjust = 0.5), axis.ticks = element_blank(), axis.text = element_blank())
+
+# Save plot
+save_plot(glue("{out_dir}/n15-adjacent_normal_per_patient.png"), plot = plot, base_height = 6.5, base_width = 8)
+Sys.sleep(1)
+```
+
+```{r}
+plot
+```
+
+```{r}
+TAN_data <- FetchData(so, vars=c(colnames(so@meta.data), "UMAP_1", "UMAP_2"))
+TAN_data
+```
+
+```{r}
+patient_palette <- c("#84C4F8FF", "#309DF4FF", "#1A7AD6FF", "#0C46A0FF", "#EA8E8EFF", "#F34940FF", "#D73130FF", "#B71B1BFF", "limegreen", "hotpink", "mediumorchid", "plum", "slateblue1", "slategray", "orange")
+```
+
+```{r}
+shuf <- function(df){
+  return(df[sample(1:dim(df)[1], dim(df)[1]),])
+}
+
+plot = TAN_data %>%
+  shuf() %>%
+  ggplot(aes(x = UMAP_1, 
+             y = UMAP_2, 
+             color = orig.ident)) +
+  geom_point(alpha = 0.6, size = 0.01) +
+  scale_color_manual(values = patient_palette) + 
+  labs(x = "UMAP1",
+       y = "UMAP2",
+       title = "Tumor Adjacent Normal per Patient") +
+  theme_classic() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.title.position = "plot",
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white", colour = "white")
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3))) + 
+  coord_fixed()
 
 # Save plot
 save_plot(glue("{out_dir}/n15-adjacent_normal_per_patient.png"), plot = plot, base_height = 6.5, base_width = 8)
@@ -83,6 +136,52 @@ plot_types
 ```
 
 ```{r}
+my_type_palette <- c("Stroma" = "limegreen",
+                "Endothelial-cells" = "#B71B1BFF", 
+                "Epithelial-cells" = "#0C46A0FF", 
+                "Myeloid-cells"="hotpink", 
+                "T-NK-cells"="mediumorchid", 
+                "B-lymphocytes"="lightblue", 
+                "MAST-cells"="orange")
+```
+
+```{r}
+shuf <- function(df){
+  return(df[sample(1:dim(df)[1], dim(df)[1]),])
+}
+
+plot = TAN_data %>%
+  shuf() %>%
+  ggplot(aes(x = UMAP_1, 
+             y = UMAP_2, 
+             color = refined_types)) +
+  geom_point(alpha = 0.6, size = 0.01) +
+  scale_color_manual(values = my_type_palette) + 
+  labs(x = "UMAP1",
+       y = "UMAP2",
+       title = "Cell types") +
+  theme_classic() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.title.position = "plot",
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white", colour = "white")
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3))) + 
+  coord_fixed()
+
+ggsave("TAN_type_umap.png", width = 6, height = 6, dpi = 300)
+```
+
+```{r}
+plot
+```
+
+```{r}
 
 # Main Fig 7b
 
@@ -110,6 +209,65 @@ Sys.sleep(1)
 
 ```{r}
 plot_subtypes
+```
+
+```{r}
+my_palette <- c("COL13A1-matrix-FBs" = 'darkgreen',
+                "COL14A1-matrix-FBs" = 'green',
+                "Pericytes" = 'lightgreen',
+                "Mesothelial-cells" = 'yellowgreen',
+                "Lymphatic-ECs" = "#EA8E8EFF",
+                "Stalk-like-ECs" = "#F34940FF",
+                "Tip-like-ECs" = "#D73130FF",
+                "Alveolar-Mac" = 'violet',
+                "CD1c-DCs" = 'hotpink',
+                "Monocytes" = 'lightcoral',
+                "T-lymphocytes" = 'purple',
+                "NK" = 'orchid',
+                "B-lymphocytes" = 'lightblue',
+                "MAST" = 'orange',
+                "AT1" = 'royalblue',
+                "AT2" = 'skyblue',
+                "Club" = 'turquoise',
+                "Ciliated" = 'navy')
+```
+
+```{r}
+shuf <- function(df){
+  return(df[sample(1:dim(df)[1], dim(df)[1]),])
+}
+
+plot <- TAN_data %>%
+  shuf() %>%
+  ggplot(aes(x = UMAP_1, 
+             y = UMAP_2, 
+             color = refined_subtypes)) +
+  geom_point(alpha = 0.6, size = 0.01) +
+  scale_color_manual(values = my_palette) + 
+  labs(x = "UMAP1",
+       y = "UMAP2",
+       title = "Cell subtypes") +
+  theme_classic() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.title.position = "plot",
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white", colour = "white")
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3))) + 
+  coord_fixed()
+
+# Save plot
+save_plot(glue("{out_dir}/TAN_umap.png"), plot = plot, base_height = 6.5, base_width = 8)
+Sys.sleep(1)
+```
+
+```{r}
+plot
 ```
 
 ### Calculating the per cell module 20 score
@@ -150,12 +308,14 @@ plot<-
   FeaturePlot(so, features = "Module20_score", reduction = "umap", label = FALSE, repel = TRUE) +
 scale_colour_gradient2(
   low = "blue",
-  mid = "white",
+  mid = "lightgray",
   high = "red",
   midpoint = 0,
   space = "Lab",
   guide = "colourbar",
-  aesthetics = "colour"
+  aesthetics = "colour",
+  limits = c(-0.25,1.0),
+  breaks = c(0.0, 0.5,1.0)
 ) +
   labs(
     title = "Per cell module 20 score",
@@ -166,7 +326,138 @@ scale_colour_gradient2(
     axis.ticks = element_blank(), 
     axis.text = element_blank()
     ) 
-ggsave(glue('{out_dir}/module_20_umap.png'), height=6.5, width=8)
+ggsave(glue('{out_dir}/module_20_umap_normal.png'), height=6.5, width=8)
+```
+
+```{r}
+plot
+```
+
+```{r}
+TAN_data <- FetchData(so, vars=c(colnames(so@meta.data), "UMAP_1", "UMAP_2"))
+
+mod20_plot = TAN_data %>%
+  shuf() %>%
+  ggplot(aes(x = UMAP_1, 
+             y = UMAP_2, 
+             color = Module20_score)) +
+  geom_point(alpha = 0.6, size = 0.01) +
+  scale_colour_gradient2(
+  low = "blue",
+  mid = "lightgray",
+  high = "red",
+  midpoint = 0,
+  space = "Lab",
+  guide = "colourbar",
+  aesthetics = "colour",
+  limits = c(-0.25,1.0),
+  breaks = c(0.0, 0.5,1.0),
+  name = " ") +
+  labs(x = "UMAP1",
+       y = "UMAP2",
+       title = "Per cell module 20 score") +
+  theme_classic() +
+  theme(
+    plot.background = element_rect(fill = "white"),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5, size = 14),
+    plot.title.position = "plot",
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white", colour = "white")
+  ) +
+  guides(color = guide_colourbar(barwidth = 1, barheight = 5)) + 
+  coord_fixed()
+# Save plots
+ggsave(glue('{out_dir}/module_20_umap_normal.png'), width = 6, height = 6, dpi = 300)
+```
+
+## Calculating composition of normal samples
+
+```{r}
+comp_df <- read.csv('NYU_normal/composition_normal_barplot.csv')
+comp_df[comp_df == "NoRecurrence"] <- "NoProgression"
+comp_df <- subset(comp_df, !(Patient %in% c('NYU1512-N', 'NYU1448-N', 'NYU1795-N', 'NYU1873-N', 'NYU1037-N', 'NYU1196-N', 'NYU1416-N', 'NYU1906-N', 'NYU1982-N', 'NYU2002-N')))
+comp_df
+```
+
+```{r}
+library(dplyr)
+x <- comp_df %>% dplyr::count(Progression)
+groups = x[[1]]
+labels = x[[2]]
+print(groups)
+print(labels)
+```
+
+```{r}
+column_names = c('Activated.DCs', 'Alveolar.Mac', 'CD1c.DCs', 'CD207CD1a.LCs', 'COL13A1.matrix.FBs', 'COL14A1.matrix.FBs', 'T.lymphocytes', 'B.lymphocytes', 'Lymphatic.ECs', 'MAST', 'Monocytes', 'Myofibroblasts', 'NK','Pericytes', 'Stalk.like.ECs', 'Tip.like.ECs', 'AT1', 'AT2', 'Ciliated', 'Club', 'Mesothelial.cells')
+for (cell_type in column_names) {
+
+comp_df$Progression <- factor(comp_df$Progression , levels=c("NoProgression", "SecondaryPrimary", "Recurrence"))
+
+my_comparisons <- list( c("NoProgression", "SecondaryPrimary"), c("SecondaryPrimary", "Recurrence"), c("NoProgression", "Recurrence") )
+#pval = kruskal.test(cell_type ~ Progression, comp_df)$p.value
+boxplot<- ggboxplot(comp_df, x = "Progression", y = cell_type,
+          color = "Progression", add = "jitter", palette=c('royalblue', 'limegreen', '#F34940FF'), legend='NONE', xlab = '', ylab='Composition', width = 0.4)+ 
+  #labs(subtitle = sprintf("Kruskal-Wallis p-value = %.3f", pval)) +
+  stat_compare_means(comparisons = my_comparisons, size=5)+ 
+  #stat_compare_means(size=5, label.x=1.5) +
+  ggtitle(glue("{cell_type}")) + theme(plot.title = element_text(hjust = 0.5, size=15), 
+                                       plot.subtitle = element_text(hjust = .5))+      scale_x_discrete(labels=c(glue('NoProgression \n n={labels[1]}'), glue('SecondaryPrimary \n n={labels[3]}'), glue('Recurrence \n n={labels[2]}')))
+
+
+save_plot(glue("NYU_normal/{cell_type}_composition.png"), plot = boxplot, base_height = 6, base_width = 6)
+}
+```
+
+Calculate CMA
+
+```{r}
+CMA = read_csv('genes_CMA.csv', show_col_types = FALSE)
+CMA
+```
+
+```{r}
+# Extract all the genes
+genes = list(CMA = CMA$gene)
+```
+
+```{r}
+so <- AddModuleScore(so, features = genes, name="CMA")
+names(so@meta.data)[ncol(so@meta.data)] <- "CMA_score"
+```
+
+```{r}
+# Check the values of the min or max to set the scale
+min(so@meta.data$CMA_score)
+max(so@meta.data$CMA_score)
+```
+
+```{r}
+# Main Fig 7c
+plot<- 
+  FeaturePlot(so, features = "CMA_score", reduction = "umap", label = FALSE, repel = TRUE) +
+scale_colour_gradient2(
+  low = "blue",
+  mid = "white",
+  high = "red",
+  midpoint = 0,
+  space = "Lab",
+  guide = "colourbar",
+  aesthetics = "colour"
+) +
+  labs(
+    title = "Per cell CMA score",
+  ) +  
+  theme(
+    aspect.ratio = 1, 
+    plot.title = element_text(hjust = 0.5),
+    axis.ticks = element_blank(), 
+    axis.text = element_blank()
+    ) 
+ggsave(glue('{out_dir}/CMA_umap.png'), height=6.5, width=8)
 ```
 
 ```{r}
@@ -179,7 +470,7 @@ plot
 # Supp Fig 10b
 data <- as.data.frame(as.matrix(so@meta.data))
 df <- data %>% 
-  group_by(label_kim2020subtypes_OG) %>%
+  group_by(refined_subtypes) %>%
   summarise(percent=100*n()/nrow(data))
 write.table(df , file = glue("{out_dir}/cell_percentages.csv"))
 ```
@@ -187,15 +478,18 @@ write.table(df , file = glue("{out_dir}/cell_percentages.csv"))
 ```{r}
 # Make one single bar rather than a bar per cell type
 df <- df %>% 
+  filter(!is.na(refined_subtypes)) %>%
   mutate(Types = "Cell_types")
 
 # Stacked + percent
-ggplot(df, aes(x=Types, y = percent, fill= label_kim2020subtypes_OG)) + 
+ggplot(df, aes(x=Types, y = percent, fill= refined_subtypes)) + 
   geom_col() +
   theme_minimal(base_size = 16) +
   ylab("Percentage") +
   xlab(NULL)+
-  scale_fill_manual(values=c('pink3', 'lightpink', 'royalblue', 'skyblue', 'lightblue', 'hotpink', 'plum1', 'navy', 'turquoise', 'darkgreen', 'green', "#EA8E8EFF", 'orange', 'yellowgreen', 'lightcoral', 'limegreen', 'orchid', 'lightgreen', "#F34940FF", "purple", "#D73130FF"))
+  #theme(legend.position = "none") # Add this line to remove the legend
+
+  scale_fill_manual(values = my_palette)
 ggsave(glue('{out_dir}/cell_perc_barplot.png'), height=10, width=6)
 ```
 
@@ -205,6 +499,8 @@ ggsave(glue('{out_dir}/cell_perc_barplot.png'), height=10, width=6)
 # Change into plot_tbl
 df <- so@meta.data
 plot_tbl <- as.data.table(df, TRUE)
+# Remove NA
+plot_tbl <- na.omit(plot_tbl)
 head(plot_tbl)
 ```
 
@@ -217,13 +513,12 @@ box_width = 0.3
 # Plot violin plot and order high to low
 vln_plot =
   plot_tbl %>%
-  ggplot(aes(x=reorder(label_HLCAv2_custom,-Module20_score,FUN=median), y = Module20_score)) +
-  geom_violin(aes(fill = label_HLCAv2_custom), scale = "width", color = NA) +
+  ggplot(aes(x=reorder(refined_subtypes,-Module20_score,FUN=median), y = Module20_score)) +
+  geom_violin(aes(fill = refined_subtypes), scale = "width", color = NA) +
   #geom_quasirandom(bandwidth = 0.8, color = "gray10", size = pt_size, alpha = 0.9) +
   geom_boxplot(width = box_width, color = "gray20", fill = "white", outlier.colour = NA, position = position_dodge(0.9)) +
   geom_hline(yintercept=0, linetype="dashed")+
-  #scale_fill_manual(values = c('pink3', 'violet', 'royalblue', 'skyblue', "lightblue", "plum1", 'navy', 'turquoise', 'darkgreen', 'green', "#EA8E8EFF", 'orange', 'slateblue','lightcoral', 'limegreen', 'orchid', 'lightgreen', '#F34940FF', 'purple', '#D73130FF')) +
-  scale_fill_manual(values = c('slateblue', 'green', 'darkgreen', 'violet', 'lightcoral', 'lightgreen', 'orange', )) +
+  scale_fill_manual(values = my_palette) +
   labs(
     title = "Module 20 Score per Cell",
     subtitle = subtitle_text,
@@ -259,7 +554,7 @@ data_frame
 
 ```{r}
 # Define the cell types you are interested in
-cell_types <- c("Activated-DCs", "Alveolar-Mac", "AT1", "AT2", "B-lymphocytes", "CD1c-DCs", "CD207CD1a-LCs", "Ciliated", "Club", "COL13A1-matrix-FBs", "COL14A1-matrix-FBs", "Lymphatic-ECs", "MAST", "Mesothelial-cells", "Monocytes", "Myofibroblasts", "NK", "Pericytes", "Stalk-like-ECs", "T-lymphocytes", "Tip-like-ECs")
+cell_types <- c("Alveolar-Mac", "AT1", "AT2", "B-lymphocytes", "CD1c-DCs", "Ciliated", "Club", "COL13A1-matrix-FBs", "COL14A1-matrix-FBs", "Lymphatic-ECs", "MAST", "Mesothelial-cells", "Monocytes", "NK", "Pericytes", "Stalk-like-ECs", "T-lymphocytes", "Tip-like-ECs")
 
 #cell_types = c("Ciliated", "Mesothelial-cells", "Club", "AT2", "AT1", "MAST", "B-lymphocytes", "NK", "T-lymphocytes", "Monocytes", "DCs", "Alveolar-Mac", "ECs", "Lymphatic-ECs", "Pericytes", "Myofibroblasts", "Other")
 ```
@@ -269,7 +564,7 @@ cell_types <- c("Activated-DCs", "Alveolar-Mac", "AT1", "AT2", "B-lymphocytes", 
 percent <- NULL
 # Iterate through desired cell-types 
 for (x in cell_types) {
-subset <- subset(df, label_kim2020subtypes_OG == x)
+subset <- subset(df, refined_subtypes == x)
 #print(subset)
 pos = sum(subset$Module20_score > 0)
 neg = sum(subset$Module20_score < 0)
@@ -292,7 +587,7 @@ plot_df
 # Main Fig 7d
 # Plot a bar per cell_type and organize to be the highest to lowest percentage
 plot = ggplot(plot_df, aes(x=reorder(cell_types, percent), y = percent, fill=cell_types)) +   geom_bar(stat = "identity") + coord_flip()+ 
-  scale_fill_manual(values = c('pink3', 'violet', 'royalblue', 'skyblue', "lightblue", "plum1",   "hotpink", 'navy', 'turquoise', 'darkgreen', 'green', "#EA8E8EFF", 'orange', 'slateblue',      'lightcoral', 'limegreen', 'orchid', 'lightgreen', '#F34940FF', 'purple', '#D73130FF')) +
+  scale_fill_manual(values = my_palette) +
   labs(
     title = "Percentage of cells with Positive Module 20 Score",
     x = "Cell-types",
@@ -322,6 +617,9 @@ plot
 ### Calculating zscore across all celltypes
 
 ```{r}
+counts_mat = read.csv('bayesprism_output_submission3/all_unnormalized_TAN_submission3.csv')
+out_dir = glue("all_unnormalized_NYU_normal_submission3/")
+if (!dir.exists(out_dir)) { dir.create(out_dir) }
 counts_mat = counts_mat %>% column_to_rownames("gene") %>% as.matrix()
 counts_mat = counts_mat[, sort(colnames(counts_mat))]
 dim(counts_mat)
@@ -400,72 +698,15 @@ zscore_mat %>% rowMeans() %>% quantile() %>% round(3)
 write.csv(zscore_mat, glue("{out_dir}/zscore_all.csv"))
 ```
 
-### Composition of noRecurrence vs Recurrence boxplots
+### Boxplot of module 20 for progression vs no-progression
 
 ```{r}
-df = read_csv('composition.csv', show_col_types = FALSE)
-```
+column_names = c('Alveolar-Mac', 'CD1c-DCs', 'COL13A1-matrix-FBs', 'COL14A1-matrix-FBs', 'T-lymphocytes', 'B-lymphocytes', 'Lymphatic-ECs', 'MAST', 'Monocytes', 'NK','Pericytes', 'Stalk-like-ECs', 'Tip-like-ECs', 'AT1', 'AT2', 'Ciliated', 'Club', 'Mesothelial-cells')
 
-```{r}
-# Filter out second primary 
-df<- df[df$progtype_code != 3, ]
-df <- subset(df, !(Patient %in% c('NYU1512-N', 'NYU1448-N', 'NYU1795-N', 'NYU1873-N', 'NYU1037-N', 'NYU1196-N', 'NYU1416-N', 'NYU1906-N', 'NYU1982-N', 'NYU2002-N')))
-df
-```
-
-```{r}
-plot_tbl <- as.data.table(df, TRUE)
-plot_tbl
-```
-
-```{r}
-for (x in colnames(df)[24:44]){
-  print(x)
-}
-```
-
-```{r}
-for (x in colnames(df)[24:44]){
-  stat <- wilcox.test(df[[x]] ~ progression, data=df)
-  pvalue <- stat[3]
-  print(unlist(pvalue[1]))
-boxplot =
-    plot_tbl %>%
-    ggplot(aes(x = progression, y = df[[x]], fill=progression)) +
-    geom_quasirandom(bandwidth = 0.8, color = "gray10", size = 0.3, alpha = 0.5) +
-    geom_boxplot(width = 0.3, outlier.colour = NA) +
-   scale_fill_manual(values = c('blue','red'))+
-    labs(
-      title = glue("{x}"),
-      subtitle = glue("p-value: {round(unlist(pvalue), digits=3)}"),
-      x = "Progression Type",
-      y = "Percentage of Cell Type"
-    ) +
-    theme_cowplot() +
-    theme(
-      plot.background = element_rect(fill = "white"),
-      plot.title = element_text(hjust = 0.5),
-      plot.subtitle = element_text(hjust = 0.5),
-      axis.text.x = element_text(),
-      strip.background = element_blank(), strip.placement = "outside",
-      legend.title = element_blank(),
-      legend.key.size = unit(1.5, 'cm')
-    ) +
-   facet_wrap(vars(), nrow = 21, scales = "free_y", strip.position = "bottom")
-  save_plot(glue("{x}_cell_type_perc_bayesprism.png"), plot = boxplot,
-          base_height = 6, base_width = 11)
-}
-```
-
-```{r}
-boxplot
-```
-
-```{r}
-column_names = c('Activated-DCs', 'Alveolar-Mac', 'CD1c-DCs', 'CD207CD1a-LCs', 'COL13A1-matrix-FBs', 'COL14A1-matrix-FBs', 'T-lymphocytes', 'B-lymphocytes', 'Lymphatic-ECs', 'MAST', 'Monocytes', 'Myofibroblasts', 'NK','Pericytes', 'Stalk-like-ECs', 'Tip-like-ECs', 'AT1', 'AT2', 'Ciliated', 'Club', 'Mesothelial-cells')
-
-cell_type='Activated-DCs'
-df <- read.csv(glue('{cell_type}.csv'))
+cell_type='Mesothelial-cells'
+out_dir = 'NYU_normal_submission3/'
+df <- read.csv(glue('{out_dir}/{cell_type}.csv'))
+df[df == "NoRecurrence"] <- "NoProgression"
 df
 ```
 
@@ -474,15 +715,25 @@ compare_means(score ~ progression, data = df)
 ```
 
 ```{r}
+library(dplyr)
+x <- df %>% dplyr::count(progression)
+groups = x[[1]]
+labels = x[[2]]
+print(groups)
+print(labels)
+```
 
-df$progression <- factor(df$progression , levels=c("NoRecurrence", "SecondaryPrimary", "Recurrence"))
-my_comparisons <- list( c("NoRecurrence", "SecondaryPrimary"), c("SecondaryPrimary", "Recurrence"), c("NoRecurrence", "Recurrence") )
+```{r}
+#drop CD1-DC and MAST, add monocytes, tip like ECs
+df$progression <- factor(df$progression , levels=c("NoProgression", "SecondaryPrimary", "Recurrence"))
+my_comparisons <- list( c("NoProgression", "SecondaryPrimary"), c("SecondaryPrimary", "Recurrence"), c("NoProgression", "Recurrence") )
 boxplot<- ggboxplot(df, x = "progression", y = "score",
           color = "progression", add = "jitter", palette=c('royalblue', 'limegreen', '#F34940FF'), legend='NONE', xlab = '', ylab='Module 20 Score')+ 
   stat_compare_means(comparisons = my_comparisons, size=5)+ # Add pairwise comparisons p-value
-  stat_compare_means(label.y = 0.5, size=5)+
+  stat_compare_means(label.y = 3.5, size=5)+
   ggtitle(glue("{cell_type}")) +
-  theme(plot.title = element_text(hjust = 0.5, size=15))
+  theme(plot.title = element_text(hjust = 0.5, size=15))+
+  scale_x_discrete(labels=c(glue('NoProgression \n n={labels[1]}'), glue('SecondaryPrimary \n n={labels[3]}'), glue('Recurrence \n n={labels[2]}')))
 
 save_plot(glue("{out_dir}/{cell_type}_main_7e.png"), plot = boxplot, base_height = 6, base_width = 6)
 ```
