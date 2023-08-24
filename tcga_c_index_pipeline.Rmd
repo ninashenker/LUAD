@@ -14,14 +14,16 @@ suppressPackageStartupMessages({
   library(matrixStats)
   library(tidyr)
   library(readr)
+  library(UCSCXenaTools)
+  library(stringr)
 })
 ```
 
 ```{r}
-cohorts <- c("LUAD", "LUSC", "HNSC", "BRCA", "PRAD", "COAD", "THCA", "KIRC", "LIHC", "LUNG")
+cohorts <- c("LUAD", "LUSC", "HNSC", "BRCA", "PRAD", "COAD", "THCA", "LIHC", "KIRC", "KICH", "KIRP", "LUNG", "Kidney")
 stages <- c("stage-1", "all_stages")
 tissue_types <- c("normal", "tumor")
-survival_types <- c("OS", "PFS")
+survival_types <- c("OS", "PFS", "RFS")
 ```
 
 ```{r}
@@ -29,11 +31,28 @@ module_gene_list <- read.csv(file = "/gpfs/data/tsirigoslab/home/leh06/Others/NY
 nb_clusters <- max(module_gene_list$module)
 ```
 
+Function for loading clinical sheet.
+
+```{r}
+load_clinical <- function(cohort){
+  # Load clinical info from UCSC Xena
+    XenaGenerate(subset = XenaHostNames=="gdcHub") %>% 
+    XenaFilter(filterDatasets = "phenotype") %>% 
+    XenaFilter(filterDatasets = cohort) -> df_todo
+    
+    XenaQuery(df_todo) %>%
+    XenaDownload() -> xe_download
+    
+    clin_info_tcga = XenaPrepare(xe_download)
+    return (clin_info_tcga)
+}
+```
+
 Create a function for survival analysis.
 
 ```{r}
 survival_analysis <- function(rna_seq_tcga, clin_info_tcga, survival_type, cohort, stage, tissue_type){
-  
+
   print(paste0("Cohort: ", cohort, "; Survival type: ", survival_type, "; Stage: ", stage, "; Tissue type: ", tissue_type))
   
   # normalized z-scores based on both normal and tumor but across all tissue types
@@ -60,44 +79,107 @@ survival_analysis <- function(rna_seq_tcga, clin_info_tcga, survival_type, cohor
   }
   
   if (survival_type == "OS") {
-    clin_info_tcga_sub <- data.frame(clin_info_tcga[,c("sample_name","days_to_death.demographic","days_to_last_follow_up.diagnoses","vital_status.demographic")])
+    clin_info_tcga_sub <- data.frame(clin_info_tcga[,c("submitter_id.samples","days_to_death.demographic","days_to_last_follow_up.diagnoses","vital_status.demographic")])
     clin_info_tcga_sub[c("days_to_death.demographic", "days_to_last_follow_up.diagnoses")] <- lapply(clin_info_tcga_sub[c("days_to_death.demographic", "days_to_last_follow_up.diagnoses")], function(x) x/30.437)
     
-    clin_info_tcga_sub$time = clin_info_tcga_sub$days_to_death.demographic 
-    clin_info_tcga_sub$time[!is.na(clin_info_tcga_sub$days_to_last_follow_up.diagnoses)] = clin_info_tcga_sub$days_to_last_follow_up.diagnoses[!is.na(clin_info_tcga_sub$days_to_last_follow_up.diagnoses)]
-    
-    rownames(clin_info_tcga_sub) <- clin_info_tcga_sub$sample_name
-    clin_info_tcga_sub <- subset(clin_info_tcga_sub, select=-c(days_to_last_follow_up.diagnoses, days_to_death.demographic, sample_name))
-    
+    clin_info_tcga_sub$time <- clin_info_tcga_sub$days_to_death.demographic
+    # clin_info_tcga_sub$time[is.na(clin_info_tcga_sub$days_to_death.demographic)] <- clin_info_tcga_sub$days_to_last_follow_up.diagnoses[is.na(clin_info_tcga_sub$days_to_death.demographic)]
+    clin_info_tcga_sub$time[!is.na(clin_info_tcga_sub$days_to_last_follow_up.diagnoses)] <- clin_info_tcga_sub$days_to_last_follow_up.diagnoses[!is.na(clin_info_tcga_sub$days_to_last_follow_up.diagnoses)]
+
     # Replace vital status by 0 for alive and 1 for dead
     clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Alive"] <- 0
     clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Dead"] <- 1
     clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Not Reported"] <- NA
-    clin_info_tcga_sub <- clin_info_tcga_sub %>% drop_na(vital_status.demographic)
-    
+
+     rownames(clin_info_tcga_sub) <- clin_info_tcga_sub$submitter_id.samples
+    clin_info_tcga_sub <- subset(clin_info_tcga_sub, select=-c(days_to_last_follow_up.diagnoses, days_to_death.demographic, submitter_id.samples))
     names(clin_info_tcga_sub)[names(clin_info_tcga_sub)=="vital_status.demographic"] <- "status"
-  } else {
+  } else if (survival_type == "PFS") {
     if ("days_to_new_tumor_event_after_initial_treatment" %in% names(clin_info_tcga)){
-      clin_info_tcga_sub <- data.frame(clin_info_tcga[,c("sample_name","days_to_last_follow_up.diagnoses","days_to_death.demographic","vital_status.demographic", "days_to_new_tumor_event_after_initial_treatment")])
+      clin_info_tcga_sub <- data.frame(clin_info_tcga[,c("submitter_id.samples","days_to_last_follow_up.diagnoses","days_to_death.demographic","vital_status.demographic", "days_to_new_tumor_event_after_initial_treatment", "new_tumor_event_after_initial_treatment")])
     
-    clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")] <- lapply(clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")], function(x) x/30.437)
-    clin_info_tcga_sub$time = clin_info_tcga_sub$days_to_death.demographic 
-    clin_info_tcga_sub$time[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)] = clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)]
-    
-    # 1 for patient having new tumor event/or died with cancer without new tumor event, and 0 for alive with progression
-    clin_info_tcga_sub$vital_status.demographic[!is.na(clin_info_tcga_sub$time)] <- 1
+      clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")] <- lapply(clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")], function(x) x/30.437)
+      
+      clin_info_tcga_sub$time <- clin_info_tcga_sub$days_to_death.demographic 
+      clin_info_tcga_sub$time[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)] <- clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)]
+      
+      # clin_info_tcga_sub$time[is.na(clin_info_tcga_sub$time)] <- clin_info_tcga_sub$days_to_last_follow_up.diagnoses[is.na(clin_info_tcga_sub$time)]
+      
+      # 1 for patient having new tumor event/or died with cancer without new tumor event, and 0 for alive without progression
+      # clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Dead"] <- 1
+      # clin_info_tcga_sub$vital_status.demographic[(clin_info_tcga_sub$vital_status.demographic != 1) & (clin_info_tcga_sub$new_tumor_event_after_initial_treatment == "YES")] <- 1
+      # clin_info_tcga_sub$vital_status.demographic[(clin_info_tcga_sub$vital_status.demographic != 1) & (clin_info_tcga_sub$new_tumor_event_after_initial_treatment == "NO")] <- 0
+      # clin_info_tcga_sub$vital_status.demographic[! clin_info_tcga_sub$vital_status.demographic %in% c(0, 1)] <- NA
+      
+      clin_info_tcga_sub$vital_status.demographic[!is.na(clin_info_tcga_sub$time)] <- 1
     clin_info_tcga_sub$vital_status.demographic[is.na(clin_info_tcga_sub$time)] <- 0
-    
-    clin_info_tcga_sub$time[is.na(clin_info_tcga_sub$time)] = clin_info_tcga_sub$days_to_last_follow_up.diagnoses[is.na(clin_info_tcga_sub$time)]
-    
-    rownames(clin_info_tcga_sub) <- clin_info_tcga_sub$sample_name
-    clin_info_tcga_sub <- subset(clin_info_tcga_sub, select=-c(days_to_new_tumor_event_after_initial_treatment, days_to_death.demographic, days_to_last_follow_up.diagnoses, sample_name))
-    names(clin_info_tcga_sub)[names(clin_info_tcga_sub)=="vital_status.demographic"] <- "status"
+    clin_info_tcga_sub$vital_status.demographic[(is.na(clin_info_tcga_sub$time)) & (clin_info_tcga_sub$new_tumor_event_after_initial_treatment == "YES")] <- 1
+    clin_info_tcga_sub$time[is.na(clin_info_tcga_sub$time)] <- clin_info_tcga_sub$days_to_last_follow_up.diagnoses[is.na(clin_info_tcga_sub$time)]
+      
+      # clin_info_tcga_sub$vital_status.demographic[is.na(clin_info_tcga_sub$time)] <- 0
+  
+      rownames(clin_info_tcga_sub) <- clin_info_tcga_sub$submitter_id.samples
+      clin_info_tcga_sub <- subset(clin_info_tcga_sub, select=-c(days_to_new_tumor_event_after_initial_treatment, days_to_death.demographic, days_to_last_follow_up.diagnoses, submitter_id.samples, new_tumor_event_after_initial_treatment))
+      
+      names(clin_info_tcga_sub)[names(clin_info_tcga_sub)=="vital_status.demographic"] <- "status"
     } else {
       return(data.frame(matrix(ncol=8,nrow=0, dimnames=list(NULL, c("module", "cohort", "stage", "tissue_type", "survival_type", "nb_samples", "pval", "c_index")))))
     }
+  } else if (survival_type == "RFS") {
+    if ("new_tumor_event_after_initial_treatment" %in% names(clin_info_tcga)){
+      if ("new_neoplasm_event_type" %in% names(clin_info_tcga)){
+         clin_info_tcga_sub <- data.frame(clin_info_tcga[,c("submitter_id.samples","days_to_last_follow_up.diagnoses","days_to_death.demographic", "days_to_new_tumor_event_after_initial_treatment", "new_tumor_event_after_initial_treatment", "new_neoplasm_event_type", "vital_status.demographic")])
+      
+         clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")] <- lapply(clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")], function(x) x/30.437)
+         clin_info_tcga_sub$time <- clin_info_tcga_sub$days_to_death.demographic
+         clin_info_tcga_sub$time[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)] = clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)]
+         
+         # 1 for patient having new tumor event/or died with cancer without new tumor event, and 0 for alive without progression or progressed with new primary
+        clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Dead"] <- 1
+        clin_info_tcga_sub$vital_status.demographic[(clin_info_tcga_sub$vital_status.demographic != 1) & (grepl("Locoregional|Metastasis", clin_info_tcga_sub$new_neoplasm_event_type))] <- 1
+        clin_info_tcga_sub$vital_status.demographic[(clin_info_tcga_sub$vital_status.demographic != 1) & (clin_info_tcga_sub$new_tumor_event_after_initial_treatment == "NO")] <- 0
+        clin_info_tcga_sub$vital_status.demographic[(clin_info_tcga_sub$vital_status.demographic != 1) & (clin_info_tcga_sub$new_neoplasm_event_type == "New Primary Tumor")] <- 0
+        clin_info_tcga_sub$vital_status.demographic[(clin_info_tcga_sub$vital_status.demographic != 1) & (!is.na(clin_info_tcga_sub$new_neoplasm_event_type))] <- 1
+        clin_info_tcga_sub$vital_status.demographic[is.na(clin_info_tcga_sub$time)] <- 0
+        clin_info_tcga_sub$vital_status.demographic[!clin_info_tcga_sub$vital_status.demographic %in% c(0,1)] <- 0
+        
+        clin_info_tcga_sub$time[is.na(clin_info_tcga_sub$time)] <- clin_info_tcga_sub$days_to_last_follow_up.diagnoses[is.na(clin_info_tcga_sub$time)]
+        
+        # clin_info_tcga_sub$vital_status.demographic[is.na(clin_info_tcga_sub$time)] <- NA
+  
+        rownames(clin_info_tcga_sub) <- clin_info_tcga_sub$submitter_id.samples
+        clin_info_tcga_sub <- subset(clin_info_tcga_sub, select=-c(days_to_new_tumor_event_after_initial_treatment, days_to_death.demographic, days_to_last_follow_up.diagnoses, submitter_id.samples, new_neoplasm_event_type, new_tumor_event_after_initial_treatment))
+        names(clin_info_tcga_sub)[names(clin_info_tcga_sub)=="vital_status.demographic"] <- "status"
+      } else {
+        clin_info_tcga_sub <- data.frame(clin_info_tcga[,c("submitter_id.samples","days_to_last_follow_up.diagnoses","days_to_death.demographic","vital_status.demographic", "days_to_new_tumor_event_after_initial_treatment", "new_tumor_event_after_initial_treatment", "additional_surgery_locoregional_procedure", "additional_surgery_metastatic_procedure")])
+    
+         clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")] <- lapply(clin_info_tcga_sub[c("days_to_death.demographic","days_to_last_follow_up.diagnoses", "days_to_new_tumor_event_after_initial_treatment")], function(x) x/30.437)
+         clin_info_tcga_sub$time <- clin_info_tcga_sub$days_to_death.demographic
+         clin_info_tcga_sub$time[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)] = clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment[!is.na(clin_info_tcga_sub$days_to_new_tumor_event_after_initial_treatment)]
+         # clin_info_tcga_sub$time[is.na(clin_info_tcga_sub$time)] <- clin_info_tcga_sub$days_to_last_follow_up.diagnoses[is.na(clin_info_tcga_sub$time)]
+         
+         # 1 for patient having new tumor event/or died with cancer without new tumor event, and 0 for alive without progression or progressed with new primary
+        clin_info_tcga_sub$vital_status.demographic[clin_info_tcga_sub$vital_status.demographic == "Dead"] <- 1
+        clin_info_tcga_sub$vital_status.demographic[(clin_info_tcga_sub$vital_status.demographic != 1) & (clin_info_tcga_sub$new_tumor_event_after_initial_treatment == "YES") & ((clin_info_tcga_sub$additional_surgery_locoregional_procedure == "YES") | (clin_info_tcga_sub$additional_surgery_metastatic_procedure == "YES"))] <- 1
+        clin_info_tcga_sub$vital_status.demographic[(clin_info_tcga_sub$vital_status.demographic != 1) & (clin_info_tcga_sub$new_tumor_event_after_initial_treatment == "NO")] <- 0
+        clin_info_tcga_sub$vital_status.demographic[(!clin_info_tcga_sub$vital_status.demographic != 1) & (!is.na(clin_info_tcga_sub$new_neoplasm_event_type))] <- 1
+        clin_info_tcga_sub$vital_status.demographic[!clin_info_tcga_sub$vital_status.demographic %in% c(0,1)] <- 0
+        clin_info_tcga_sub$vital_status.demographic[is.na(clin_info_tcga_sub$time)] <- 0
+        
+        clin_info_tcga_sub$time[is.na(clin_info_tcga_sub$time)] <- clin_info_tcga_sub$days_to_last_follow_up.diagnoses[is.na(clin_info_tcga_sub$time)]
+        
+        # clin_info_tcga_sub$vital_status.demographic[is.na(clin_info_tcga_sub$time)] <- NA
+       
+        rownames(clin_info_tcga_sub) <- clin_info_tcga_sub$submitter_id.samples
+        clin_info_tcga_sub <- subset(clin_info_tcga_sub, select=-c(days_to_new_tumor_event_after_initial_treatment, days_to_death.demographic, days_to_last_follow_up.diagnoses, submitter_id.samples, new_tumor_event_after_initial_treatment, additional_surgery_locoregional_procedure, additional_surgery_metastatic_procedure))
+        names(clin_info_tcga_sub)[names(clin_info_tcga_sub)=="vital_status.demographic"] <- "status"
+      }
+    } else {
+      return(data.frame(matrix(ncol=8,nrow=0, dimnames=list(NULL, c("module", "cohort", "stage", "tissue_type", "survival_type", "nb_samples", "pval", "c_index")))))
+    }
+    
   }
-   
+  
   # Filter per tissue type
   if (tissue_type == "tumor"){
     module_scores_filtered <- module_scores %>%
@@ -135,9 +217,11 @@ survival_analysis <- function(rna_seq_tcga, clin_info_tcga, survival_type, cohor
     rownames(surv_tcga) <- surv_tcga$Row.names
     surv_tcga <- surv_tcga[, -c(1)]
     surv_tcga <- surv_tcga %>% drop_na(time)
-    surv_tcga$status <- as.numeric(surv_tcga$status)
     
     stats_tab[stats_tab$module == module,"nb_samples"] <- nrow(surv_tcga)
+    
+    surv_tcga <- surv_tcga %>% drop_na(status)
+    surv_tcga$status <- as.numeric(surv_tcga$status)
     
     surv_tcga_module <- surv_tcga[,c("time","status", module)]
     colnames(surv_tcga_module)[colnames(surv_tcga_module) == module] <- "moduleScore"
@@ -153,9 +237,11 @@ survival_analysis <- function(rna_seq_tcga, clin_info_tcga, survival_type, cohor
       } else if (cohort == "BRCA"){
         cancer_type <- "Breast"
       } else if (cohort == "KIRC"){
-        cancer_type <- "Kidney"
+        cancer_type <- "Kidney-KIRC"
       } else if (cohort == "HNSC"){
         cancer_type <- "Head and Neck"
+      } else if (cohort == "Kidney"){
+        cancer_type <- "Kidney"
       } else {
         cancer_type <- "skip"
       }
@@ -222,14 +308,21 @@ Load TCGA tumor and normal data and run survival analysis per module, cohort, st
 ```{r}
 stats_final <- data.frame(matrix(ncol=8,nrow=0, dimnames=list(NULL, c("module", "cohort", "stage", "tissue_type", "survival_type", "nb_samples", "pval", "c_index"))))
 for (cohort in cohorts){
-  if (cohort != "LUNG"){
-    # Load dataset
-    rna_seq_tcga <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-", cohort, ".exp.counts.tsv.gz"), sep = '\t', header = TRUE)
-  } else {
+  
+  if (cohort == "LUNG"){
     rna_seq_tcga_luad <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-LUAD.exp.counts.tsv.gz"), sep = '\t', header = TRUE)
     rna_seq_tcga_lusc <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-LUSC.exp.counts.tsv.gz"), sep = '\t', header = TRUE)
     rna_seq_tcga <- merge(rna_seq_tcga_luad, rna_seq_tcga_lusc, by = "gene_name")
+  } else if (cohort == "Kidney"){
+    rna_seq_tcga_kirc <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-KIRC.exp.counts.tsv.gz"), sep = '\t', header = TRUE)
+    rna_seq_tcga_kich <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-KICH.exp.counts.tsv.gz"), sep = '\t', header = TRUE)
+    rna_seq_tcga_kirp <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-KIRP.exp.counts.tsv.gz"), sep = '\t', header = TRUE)
+    rna_seq_tcga_kidney <- list(rna_seq_tcga_kirc, rna_seq_tcga_kich, rna_seq_tcga_kirp)
+    rna_seq_tcga <- rna_seq_tcga_kidney  %>% reduce(full_join, by='gene_name') 
+  } else {
+    rna_seq_tcga <- read.table(file = paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-", cohort, ".exp.counts.tsv.gz"), sep = '\t', header = TRUE)
   }
+  
   rownames(rna_seq_tcga) <- rna_seq_tcga$gene_name
   rna_seq_tcga <- subset(rna_seq_tcga, select = -gene_name)
   
@@ -240,20 +333,37 @@ for (cohort in cohorts){
   rna_seq_tcga_inv <- as.data.frame(t(rna_seq_tcga))
   rownames(rna_seq_tcga_inv) <- names(rna_seq_tcga)
   
-  if (cohort != "LUNG"){
-    # Load clinical info
-    clin_info_tcga <- read_tsv(paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-", cohort,".pheno.tsv"), show_col_types = FALSE)
+  if (cohort == "LUNG"){
+    clin_info_tcga_luad <- load_clinical("LUAD")
+    clin_info_tcga_lusc <- load_clinical("LUSC")
+    shared_cols <- Reduce(intersect, lapply(list(clin_info_tcga_luad, clin_info_tcga_lusc), names))
+    clin_info_tcga <- rbind(clin_info_tcga_luad[,shared_cols],clin_info_tcga_lusc[,shared_cols])
+  } else if ((cohort == "Kidney")){
+    clin_info_tcga_kirc <- load_clinical("KIRC")
+    clin_info_tcga_kich <- load_clinical("KICH")
+    clin_info_tcga_kirp <- load_clinical("KIRP")
+    
+    clin_info_tcga_kich$new_tumor_event_after_initial_treatment <- NA
+    clin_info_tcga_kich$days_to_new_tumor_event_after_initial_treatment <- NA
+    clin_info_tcga_kich$additional_surgery_locoregional_procedure <- NA
+    clin_info_tcga_kich$additional_surgery_metastatic_procedure <- NA
+    
+    shared_cols <- Reduce(intersect, lapply(list(clin_info_tcga_kirc, clin_info_tcga_kich, clin_info_tcga_kirp), names))
+    clin_info_tcga <- rbind(clin_info_tcga_kirc[,shared_cols],clin_info_tcga_kich[,shared_cols], clin_info_tcga_kirp[,shared_cols])
+
   } else {
-    clin_info_tcga_luad <- read_tsv(paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-LUAD.pheno.tsv"), show_col_types = FALSE)
-    clin_info_tcga_lusc <- read_tsv(paste0("/gpfs/data/tsirigoslab/home/leh06/Others/out-tcga/TCGA-LUSC.pheno.tsv"), show_col_types = FALSE)
-    clin_info_tcga <- rbind(clin_info_tcga_luad,clin_info_tcga_lusc)
+    clin_info_tcga <- load_clinical(cohort)
   }
   
   for (survival_type in survival_types){
     for (stage in stages){
       for (tissue_type in tissue_types){
+        # if ((cohort %in% c("COAD", "THCA", "LIHC", "KICH")) & (survival_type %in% c("PFS", "RFS"))){
+        #   print(paste0("No progression/recurrence information for ", cohort))
+        # } else {
         stats_tab <- survival_analysis(rna_seq_tcga_inv, clin_info_tcga, survival_type, cohort, stage, tissue_type)
         stats_final <- rbind(stats_final, stats_tab)
+        # }
       }
     }
   }
@@ -263,11 +373,11 @@ for (cohort in cohorts){
 
 Summarize all information in one excel sheet.
 ```{r}
-write.xlsx(stats_final,paste0("/gpfs/data/tsirigoslab/home/leh06/Others/NYU_RNA/surv_stats_nyustage1modules_on_tcga_norm.xlsx"))
+write.xlsx(stats_final,paste0("/gpfs/data/tsirigoslab/home/leh06/Others/NYU_RNA/surv_stats_nyustage1modules_on_tcga_norm_v5.xlsx"))
 ```
 
 Summarize all information in one excel sheet (filtered pval).
 ```{r}
-stats_final_filtered <- stats_final[(stats_final$pval<0.05),]
-write.xlsx(stats_final_filtered,paste0("/gpfs/data/tsirigoslab/home/leh06/Others/NYU_RNA/surv_stats_nyustage1modules_on_tcga_norm_filtered.xlsx"))
+# stats_final_filtered <- stats_final[(stats_final$pval<0.05),]
+# write.xlsx(stats_final_filtered[complete.cases(stats_final_filtered),],paste0("/gpfs/data/tsirigoslab/home/leh06/Others/NYU_RNA/surv_stats_nyustage1modules_on_tcga_norm_filtered_v5.xlsx"))
 ```
