@@ -1,0 +1,163 @@
+---
+title: "surv_plot"
+output: html_document
+date: "2023-05-09"
+---
+
+## R Markdown
+
+Libraries
+
+```{r}
+suppressPackageStartupMessages({
+library(ggplot2) 
+library(reshape2) 
+library(tibble) 
+library(ggrepel) 
+library(survival) 
+library(forestplot) 
+library(survcomp) 
+library(caret) 
+library(GGally) 
+library(glmnet)
+})
+```
+
+## Surv plot per cell type
+
+Look into a high module 20 for a specific cell type is an better overall predictor rather than overall module 20
+
+```{r}
+# Load in seurat obj
+so <- readRDS('nyu_123.RDS')
+```
+
+```{r}
+# Define the groups for the survival analysis based on a module 20 expression threshold
+module20_threshold <- median(so$module)  # You can use a different threshold if desired
+groups <- ifelse(so$module >= module20_threshold, "High", "Low")
+
+# Create a new data frame with the survival time, censoring status, and groups variables
+surv_data <- data.frame(time = so$TTP, status = so$Progression, groups = groups)
+
+# Perform the log-rank test using the new data frame
+surv_time=Surv(so$TTP,so$Progression)
+sdf=survdiff(surv_time~groups)
+p.val <- 1 - pchisq(sdf$chisq, length(sdf$n) - 1)  
+```
+
+```{r}
+model_formula=as.formula(paste0('Surv(TTP,Progression)~',paste('module',collapse='+')))
+surv_fit=coxph(model_formula,so)
+```
+
+```{r}
+outpath = '/Users/shenkn01/Dropbox (NYU Langone Health)/LUAD/Revisions'
+yLabels <- seq(0, 1.0, 0.1)
+filename=paste0(outpath,'/fig5b_surv_module_20.png')
+```
+
+```{r}
+t11=survfit(surv_time~groups)
+p1=ggsurv(survfit(surv_time~groups),CI=F,size.est=1.5) +
+  geom_ribbon(aes(ymin=low,ymax=up,fill=group),alpha=0.3)+
+  xlab('Days Disease Free')+ylab('Disease Free')+ 
+  ggtitle(paste('Normal module 20 :',' P=', format(p.val,digits=3), ' Low/High Module score ', sum(groups=='Low'),'|',sum(groups=='High'),collapse='',sep=''))+
+  theme_classic()+ 
+  scale_y_continuous(limits=c(floor(min(t11$lower)*10)/10,1),breaks=yLabels, labels=sprintf(round(100*yLabels), fmt="%2.0f%%"))+
+  scale_color_manual(values=c('blue','red'), labels=c('Module Score Low','Module Score High')) +
+  scale_fill_manual(values=c('blue','red'), labels=c('Module Score Low','Module Score High')) +
+  theme(axis.text = element_text(size = 32),
+        axis.title = element_text(size = 25),
+        text = element_text(size = 10),
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=30))+
+  guides(fill='none',linetype='none')
+
+ggsave(filename = filename,p1,device='png',width=12,height=8)
+```
+
+```{r}
+p1
+```
+
+```{r}
+# Now per cell type
+setwd('NYU_normal/')
+celltypes <- c('Activated-DCs', 'Alveolar-Mac', 'CD1c-DCs', 'CD207CD1a-LCs', 'COL13A1-matrix-FBs', 'COL14A1-matrix-FBs', 'T-lymphocytes', 'B-lymphocytes', 'Lymphatic-ECs', 'MAST', 'Monocytes', 'Myofibroblasts', 'NK','Pericytes', 'Stalk-like-ECs', 'Tip-like-ECs', 'AT1', 'AT2', 'Ciliated', 'Club', 'Mesothelial-cells')
+
+dfs <- lapply(celltypes, function(ct){
+  df <- read.csv(paste0(ct, ".csv"))
+  df <- df[c("Patient", "score")]
+  names(df)[2] <- ct
+  return(df)
+})
+merged_df <- Reduce(function(x, y) merge(x, y, by = "Patient", all = TRUE), dfs)
+
+```
+
+```{r}
+# remove "NYU" from Patient column in merged_df
+merged_df$Study_ID <- gsub("NYU", "", merged_df$Patient)
+merged_df$Study_ID <- gsub("-N", "", merged_df$Study_ID)
+
+# merge merged_df and so by Study_ID
+merged_so <- merge(merged_df, so, by="Study_ID", all.x=TRUE)
+```
+
+```{r}
+
+# Define the cell types to loop through
+cell_types <- c('Activated-DCs', 'Alveolar-Mac', 'CD1c-DCs', 'COL13A1-matrix-FBs', 'COL14A1-matrix-FBs', 'T-lymphocytes', 'B-lymphocytes', 'MAST', 'Monocytes', 'Myofibroblasts','Pericytes', 'Stalk-like-ECs', 'Tip-like-ECs', 'AT1', 'AT2', 'Club', 'Mesothelial-cells')
+
+# Loop through each cell type
+for (cell_type in cell_types) {
+  # Subset the data for the current cell type
+  curdata <- merged_so[, c("Study_ID", "Patient", "Progression", "TTP", cell_type)]
+  
+  # Rename column bc if not it causes issues with the '-'
+  colnames(curdata)[5] <- "celltype_module"
+
+  # This caused issues for the celltypes where there is no NA!
+  #curdata <- curdata[complete.cases(curdata), ]
+
+  # Define the groups for the survival analysis based on a module 20 expression threshold
+  module20_threshold <- median(as.numeric(curdata$celltype_module), na.rm = TRUE)
+  print(module20_threshold)
+  
+  # You can use a different threshold if desired
+  groups <- ifelse(curdata$celltype_module >= module20_threshold, "High", "Low")
+ 
+  #Perform log-rank test
+  surv_time=Surv(curdata$TTP,curdata$Progression)
+  sdf=survdiff(surv_time~groups)
+  p.val <- 1 - pchisq(sdf$chisq, length(sdf$n) - 1) 
+  
+  model_formula=as.formula(paste0('Surv(TTP,Progression)~',paste('module',collapse='+')))
+  surv_fit=coxph(model_formula,so)
+  
+  #Define where to save
+  outpath = '/Users/shenkn01/Dropbox (NYU Langone Health)/LUAD/Revisions/Survival_plot_median/'
+  yLabels <- seq(0, 1.0, 0.1)
+  filename <- paste0(outpath, "/fig5b_surv_module_20_", cell_type, ".png")
+  
+  t11=survfit(surv_time~groups)
+  
+  p1=ggsurv(survfit(surv_time~groups),CI=F,size.est=1.5) +
+  geom_ribbon(aes(ymin=low,ymax=up,fill=group),alpha=0.3)+
+  xlab('Days Disease Free')+ylab('Disease Free')+ 
+  ggtitle(paste(cell_type, '   Normal module 20 :',' P=', format(p.val,digits=3), ' Low/High Module score ', sum(groups=='Low'),'|',sum(groups=='High'),collapse='',sep=''))+
+  theme_classic()+ 
+  scale_y_continuous(limits=c(floor(min(t11$lower)*10)/10,1),breaks=yLabels, labels=sprintf(round(100*yLabels), fmt="%2.0f%%"))+
+  scale_color_manual(values=c('blue','red'), labels=c('Module Score Low','Module Score High')) +
+  scale_fill_manual(values=c('blue','red'), labels=c('Module Score Low','Module Score High')) +
+  theme(axis.text = element_text(size = 32),
+        axis.title = element_text(size = 25),
+        text = element_text(size = 18),
+        legend.text=element_text(size=20),
+        legend.title=element_text(size=30))+
+  guides(fill='none',linetype='none')
+
+ggsave(filename = filename,p1,device='png',width=12,height=8)
+}
+```
