@@ -1,0 +1,73 @@
+---
+title: "Figure 3d: Dot plot of enriched hallmarks across modules (module 10, 13 and 19 have no highly significant associations)"
+output: html_notebook
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(openxlsx)
+  library(enrichR)
+  library(ggplot2)
+  library(dplyr)
+  library(knitr)
+})
+```
+
+
+Plot the dotplot figure (Main 3d).
+```{r}
+# Plot figure 3d
+csv_pathway <- "/gpfs/data/tsirigoslab/home/leh06/Others/dotplots_presentation/246samples.coding10000.modules.dim10.k20.gsea-h.csv"
+out_file <- "/gpfs/data/tsirigoslab/home/leh06/Others/dotplots_presentation/fig3d.png"
+ylab <- "Pathway"
+pathway_type <- "Hallmark"
+pval_threshold = 10e-10
+# Load dataset (csv or excel format)
+if (str_sub(csv_pathway, -3, -1) == "csv") {
+  data <- read.csv(csv_pathway)
+} else {
+  data <- read.xlsx(csv_pathway)
+}
+# Turn gene ratios into numeric values
+data$GeneRatio <- unlist(lapply(str_split(data$GeneRatio,"/"), function(x) {as.integer(x[1])/as.integer(x[2])}))
+# Rename clusters with Module_#
+data$Cluster <- paste0("Module_", data$Cluster)
+
+# If pathway analyzed is Hallmarks of cancer, rename Hallmarks by removing the pattern "HALLMARK_" and deleting "_"
+if (pathway_type == "Hallmark"){
+  data$Description <- str_replace_all(str_remove(data$Description, "HALLMARK_"), "_", " ")
+}
+
+# Take -log of p-values
+data$padj.log <- -log10(data$p.adj)
+
+# Order the rows by p-values
+data_y <- data %>%
+  dplyr::select(Description, p.adjust, Cluster) %>%
+  pivot_wider(names_from = Description, values_from = p.adjust) %>%
+  data.frame()
+row.names(data_y) <- data_y$Cluster
+data_y <- data_y[,-1]
+clust_y <- order(colMins(as.matrix(data_y), na.rm = TRUE),decreasing = TRUE)
+
+# Filter data so that very small pvalues are 
+data_filtered <- data
+data_filtered$padj.log[data_filtered$p.adjust < pval_threshold] <- -log10(pval_threshold)
+
+# Generate dotplot
+png(file=out_fig,  width = round(length(unique(data$Cluster))/2)+4, height = round(length(unique(data$Description))/6), units = 'in', res = 600)
+print(ggplot(data_filtered, aes(x = factor(Cluster, levels=unique(Cluster)), 
+                          y = factor(Description, levels=unique(Description)[clust_y]), 
+                          color = padj.log, size = GeneRatio)) + 
+  geom_point() +
+  labs(color = "-log10(p-value)", size = "Gene Ratio") +
+  scale_color_gradient(high = "red", low = "orange") +
+  scale_size_continuous(range = c(0.5,4)) +
+  theme_bw(base_rect_size = 1, base_line_size = 0.3) +
+  theme(axis.text.x = element_text(angle = 45, vjust=1, hjust=1), axis.text = element_text(size = 8),
+        axis.title=element_text(size=14), legend.title=element_text(size=14)) +
+  ylab(ylab) + 
+  xlab("Module") )
+dev.off()
+```
+
