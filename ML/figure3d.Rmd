@@ -6,10 +6,8 @@ output: html_notebook
 ```{r}
 suppressPackageStartupMessages({
   library(openxlsx)
-  library(enrichR)
   library(ggplot2)
   library(dplyr)
-  library(knitr)
 })
 ```
 

@@ -5,9 +5,6 @@ output: html_notebook
 
 ```{r message=FALSE, warning=FALSE}
 suppressPackageStartupMessages({
-  library(survival)
-  # library(survminer)
-  # library(survcomp)
   library(dplyr)
   library(openxlsx)
   library(stringr)
